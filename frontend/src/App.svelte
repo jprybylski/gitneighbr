@@ -41,6 +41,14 @@
     error: { code: string; message: string; recoverable: boolean } | null;
   };
 
+  type PushResult = {
+    remote: string;
+    remote_branch: string;
+    branch: string;
+    sha: string;
+    pushed_count: number;
+  };
+
   const STATE_COPY: Record<string, string> = {
     READY: "Everything is saved and up to date.",
     CHANGES_ONLY: "You have unsaved changes.",
@@ -87,9 +95,18 @@
   let commitError = $state<string | null>(null);
   let commitSuccess = $state<string | null>(null);
 
+  let sendToGithub = $state(true);
+  let sending = $state(false);
+  let sendError = $state<string | null>(null);
+  let sendSuccess = $state<string | null>(null);
+  let canRetrySend = $state(false);
+
   const summaryLength = $derived(summary.trim().length);
   const summaryValid = $derived(summaryLength >= 3 && summaryLength <= 72);
-  const canSave = $derived(selected.size > 0 && summaryValid && !committing);
+  const canSend = $derived(status?.upstream != null);
+  const willSend = $derived(canSend && sendToGithub);
+  const actionLabel = $derived(willSend ? "Save and send" : "Save snapshot");
+  const canSave = $derived(selected.size > 0 && summaryValid && !committing && !sending);
 
   async function api<T>(path: string): Promise<Envelope<T>> {
     const res = await fetch(path, {
@@ -154,6 +171,10 @@
     if (!canSave) return;
     commitError = null;
     commitSuccess = null;
+    sendError = null;
+    sendSuccess = null;
+    canRetrySend = false;
+    const shouldSend = willSend;
     committing = true;
     try {
       const envelope = await postApi<{ sha: string; summary: string }>("/api/v1/commit", {
@@ -163,18 +184,54 @@
       });
       if (!envelope.ok || !envelope.data) {
         commitError = envelope.error?.message ?? "Could not save this snapshot.";
-      } else {
-        commitSuccess = `Saved snapshot ${envelope.data.sha}.`;
-        summary = "";
-        details = "";
-        activePath = null;
-        diff = null;
-        await loadStatus();
+        return;
+      }
+      commitSuccess = `Saved snapshot ${envelope.data.sha}.`;
+      summary = "";
+      details = "";
+      activePath = null;
+      diff = null;
+      await loadStatus();
+      if (shouldSend) {
+        await sendSavedSnapshots();
       }
     } catch (err) {
       commitError = err instanceof Error ? err.message : "Could not reach the gitneighbr server.";
     } finally {
       committing = false;
+    }
+  }
+
+  // Frontend orchestration over separate `/refresh-remote` and `/push`
+  // calls (spec §14.1: "not one opaque backend transaction"). A snapshot
+  // that already saved locally stays saved even if this fails, so on
+  // failure the interface must say so precisely rather than implying the
+  // whole "Save and send" action was lost - see `canRetrySend`.
+  async function sendSavedSnapshots() {
+    sendError = null;
+    sendSuccess = null;
+    canRetrySend = false;
+    sending = true;
+    try {
+      const refreshEnvelope = await postApi<Omit<StatusData, "repository">>("/api/v1/refresh-remote", {});
+      if (!refreshEnvelope.ok) {
+        sendError = refreshEnvelope.error?.message ?? "Could not check GitHub for updates before sending.";
+        canRetrySend = true;
+        return;
+      }
+      const pushEnvelope = await postApi<PushResult>("/api/v1/push", {});
+      if (!pushEnvelope.ok || !pushEnvelope.data) {
+        sendError = pushEnvelope.error?.message ?? "Could not send this snapshot to GitHub.";
+        canRetrySend = true;
+        return;
+      }
+      sendSuccess = `Sent to ${pushEnvelope.data.remote}/${pushEnvelope.data.remote_branch}.`;
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : "Could not reach the gitneighbr server.";
+      canRetrySend = true;
+    } finally {
+      sending = false;
+      await loadStatus();
     }
   }
 
@@ -302,72 +359,104 @@
           {/each}
         </ul>
       </section>
+    {/if}
 
+    {#if changes.length > 0 || commitError || commitSuccess}
       <section class="commit-form" aria-label="Save a snapshot">
         <h2>Save snapshot</h2>
-        <p class="selection-count">
-          {selected.size} of {changes.length} file{changes.length === 1 ? "" : "s"} selected
-        </p>
-        <label class="field" for="commit-summary">
-          Summary <span class="required">(required, 3-72 characters)</span>
-        </label>
-        <input
-          id="commit-summary"
-          type="text"
-          maxlength="72"
-          bind:value={summary}
-          placeholder="What changed?"
-          disabled={committing}
-        />
-        <label class="field" for="commit-details">Details <span class="optional">(optional)</span></label>
-        <textarea
-          id="commit-details"
-          rows="3"
-          bind:value={details}
-          placeholder="Add more explanation if it helps"
-          disabled={committing}
-        ></textarea>
+
+        {#if changes.length > 0}
+          <p class="selection-count">
+            {selected.size} of {changes.length} file{changes.length === 1 ? "" : "s"} selected
+          </p>
+          <label class="field" for="commit-summary">
+            Summary <span class="required">(required, 3-72 characters)</span>
+          </label>
+          <input
+            id="commit-summary"
+            type="text"
+            maxlength="72"
+            bind:value={summary}
+            placeholder="What changed?"
+            disabled={committing}
+          />
+          <label class="field" for="commit-details">Details <span class="optional">(optional)</span></label>
+          <textarea
+            id="commit-details"
+            rows="3"
+            bind:value={details}
+            placeholder="Add more explanation if it helps"
+            disabled={committing}
+          ></textarea>
+
+          {#if canSend}
+            <label class="field-inline">
+              <input
+                type="checkbox"
+                bind:checked={sendToGithub}
+                disabled={committing || sending}
+              />
+              Also send to GitHub
+            </label>
+          {/if}
+        {/if}
 
         {#if commitError}
           <div class="card error" role="alert"><p>{commitError}</p></div>
         {/if}
         {#if commitSuccess}
-          <div class="card success" role="status"><p>{commitSuccess}</p></div>
+          <div class="card success" role="status">
+            <p>{commitSuccess}</p>
+            {#if sending}
+              <p>Checking GitHub for updates and sending&hellip;</p>
+            {:else if sendSuccess}
+              <p>{sendSuccess}</p>
+            {:else if sendError}
+              <p class="partial-failure">Not yet sent to GitHub: {sendError}</p>
+            {/if}
+          </div>
+        {/if}
+        {#if canRetrySend}
+          <button type="button" class="retry-button" disabled={sending} onclick={sendSavedSnapshots}>
+            {sending ? "Sending…" : "Retry sending to GitHub"}
+          </button>
         {/if}
 
-        <button type="button" class="save-button" disabled={!canSave} onclick={saveSnapshot}>
-          {committing ? "Saving…" : "Save snapshot"}
-        </button>
+        {#if changes.length > 0}
+          <button type="button" class="save-button" disabled={!canSave} onclick={saveSnapshot}>
+            {committing ? "Saving…" : sending ? "Sending…" : actionLabel}
+          </button>
+        {/if}
       </section>
+    {/if}
 
-      {#if activePath}
-        <section class="diff-pane" aria-label={`Diff for ${activePath}`} aria-live="polite">
-          <h2>{activePath}</h2>
-          {#if diffLoading && !diff}
-            <p>Loading diff&hellip;</p>
-          {:else if diffError}
-            <div class="card error" role="alert"><p>{diffError}</p></div>
-          {:else if diff}
-            {#if diff.binary}
-              <p class="diff-binary">This is a binary file. No text diff is available.</p>
-            {:else if diff.lines.length === 0}
-              <p>No differences to show.</p>
-            {:else}
-              <pre class="diff-body"><code
-                >{#each diff.lines as line}<span class="diff-line {diffLineClass(line)}"
-                    ><span class="diff-sign" aria-hidden="true">{diffLineSign(line)}</span
-                    >{diffLineText(line)}
+    {#if activePath}
+      <section class="diff-pane" aria-label={`Diff for ${activePath}`} aria-live="polite">
+        <h2>{activePath}</h2>
+        {#if diffLoading && !diff}
+          <p>Loading diff&hellip;</p>
+        {:else if diffError}
+          <div class="card error" role="alert"><p>{diffError}</p></div>
+        {:else if diff}
+          {#if diff.binary}
+            <p class="diff-binary">This is a binary file. No text diff is available.</p>
+          {:else if diff.lines.length === 0}
+            <p>No differences to show.</p>
+          {:else}
+            <pre class="diff-body"><code
+              >{#each diff.lines as line}<span class="diff-line {diffLineClass(line)}"
+                  ><span class="diff-sign" aria-hidden="true">{diffLineSign(line)}</span
+                  >{diffLineText(line)}
 </span>{/each}</code
-              ></pre>
-              {#if diff.truncated}
-                <button type="button" class="load-more" onclick={loadMoreDiff} disabled={diffLoading}>
-                  {diffLoading ? "Loading…" : `Load more (${diff.offset_lines + diff.lines.length} of ${diff.total_lines} lines)`}
-                </button>
-              {/if}
+            ></pre>
+            {#if diff.truncated}
+              <button type="button" class="load-more" onclick={loadMoreDiff} disabled={diffLoading}>
+                {diffLoading ? "Loading…" : `Load more (${diff.offset_lines + diff.lines.length} of ${diff.total_lines} lines)`}
+              </button>
             {/if}
           {/if}
-        </section>
-      {/if}
+        {/if}
+      </section>
     {/if}
   {/if}
 </main>
@@ -609,6 +698,30 @@
   }
   .commit-form textarea {
     resize: vertical;
+  }
+  .field-inline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    font-weight: 600;
+  }
+  .partial-failure {
+    color: #856404;
+  }
+  .retry-button {
+    margin-top: 0.75rem;
+    font: inherit;
+    padding: 0.4rem 0.9rem;
+    border: 1px solid #856404;
+    border-radius: 0.4rem;
+    background: #fff8e1;
+    color: #856404;
+    cursor: pointer;
+  }
+  .retry-button:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
   .save-button {
     margin-top: 1.25rem;
