@@ -3,6 +3,8 @@
 ^frontend$
 ^gitneighbor-package-specification\.md$
 ^CLAUDE\.md$
+^AGENTS\.md$
+^LICENSE\.md$
 ^\.github$
 ^README\.Rmd$
 ^\.claude$
