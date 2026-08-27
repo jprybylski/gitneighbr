@@ -147,3 +147,81 @@ test_that(".git_push_current_branch fails with NO_UPSTREAM when the branch has n
   expect_false(result$ok)
   expect_equal(result$code, "NO_UPSTREAM")
 })
+
+test_that(".classify_update_failure maps a non-fast-forwardable merge to DIVERGED", {
+  expect_equal(
+    .classify_update_failure("fatal: Not possible to fast-forward, aborting."),
+    "DIVERGED"
+  )
+  expect_equal(.classify_update_failure("fatal: something else broke"), "COMMAND_FAILED")
+})
+
+test_that(".git_update_current_branch fast-forwards a behind-only branch", {
+  repo <- local_repo_with_remote()
+  writeLines("more", file.path(repo$origin_dir, "more.txt"))
+  repo$origin_run("add", "more.txt")
+  repo$origin_run("commit", "-q", "-m", "remote-only commit")
+  repo$origin_run("push", "-q", "origin", "main")
+
+  result <- .git_update_current_branch(repo$dir, repo$git)
+  expect_true(result$ok)
+  expect_equal(result$remote, "origin")
+  expect_equal(result$remote_branch, "main")
+  expect_equal(result$updated_count, 1L)
+  expect_true(file.exists(file.path(repo$dir, "more.txt")))
+})
+
+test_that(".git_update_current_branch refuses a dirty working tree without fetching", {
+  repo <- local_repo_with_remote()
+  writeLines("more", file.path(repo$origin_dir, "more.txt"))
+  repo$origin_run("add", "more.txt")
+  repo$origin_run("commit", "-q", "-m", "remote-only commit")
+  repo$origin_run("push", "-q", "origin", "main")
+
+  writeLines("dirty", file.path(repo$dir, "dirty.txt"))
+
+  result <- .git_update_current_branch(repo$dir, repo$git)
+  expect_false(result$ok)
+  expect_equal(result$code, "DIRTY_BLOCKS_UPDATE")
+  # No fetch happened: the remote-only commit is still not reflected locally.
+  status <- .git_status(repo$dir, repo$git)
+  expect_equal(status$behind, 0L)
+})
+
+test_that(".git_update_current_branch refuses to update when histories have diverged", {
+  repo <- local_repo_with_remote()
+  writeLines("more", file.path(repo$origin_dir, "more.txt"))
+  repo$origin_run("add", "more.txt")
+  repo$origin_run("commit", "-q", "-m", "remote-only commit")
+  repo$origin_run("push", "-q", "origin", "main")
+
+  writeLines("local change", file.path(repo$dir, "local.txt"))
+  repo$run("add", "local.txt")
+  repo$run("commit", "-q", "-m", "local commit")
+
+  result <- .git_update_current_branch(repo$dir, repo$git)
+  expect_false(result$ok)
+  expect_equal(result$code, "DIVERGED")
+})
+
+test_that(".git_update_current_branch is a no-op success when already up to date", {
+  repo <- local_repo_with_remote()
+  result <- .git_update_current_branch(repo$dir, repo$git)
+  expect_true(result$ok)
+  expect_equal(result$updated_count, 0L)
+})
+
+test_that(".git_update_current_branch fails with NO_UPSTREAM when the branch has none", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  dir <- withr::local_tempdir()
+  run <- function(...) processx::run(git, c("-C", dir, ...), error_on_status = TRUE)
+  run("init", "-q", "-b", "main")
+  writeLines("x", file.path(dir, "x.txt"))
+  run("add", "x.txt")
+  run("commit", "-q", "-m", "initial")
+
+  result <- .git_update_current_branch(dir, git)
+  expect_false(result$ok)
+  expect_equal(result$code, "NO_UPSTREAM")
+})

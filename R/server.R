@@ -201,6 +201,25 @@
         pushed_count = result$pushed_count
       ))
     }) |>
+    plumber2::api_post("/api/v1/update", function(request) {
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+
+      result <- .git_update_current_branch(repo_root, git_bin)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+      }
+      .ok_envelope(list(
+        remote = result$remote,
+        remote_branch = result$remote_branch,
+        branch = result$branch,
+        sha = result$sha,
+        updated_count = result$updated_count
+      ))
+    }) |>
     plumber2::api_post("/api/v1/tag", function(request) {
       require_auth(request)
 

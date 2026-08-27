@@ -197,3 +197,103 @@
     pushed_count = fresh_status$ahead
   )
 }
+
+#' Map `git merge --ff-only`'s stderr to a stable application error code
+#' @noRd
+.classify_update_failure <- function(stderr_text) {
+  text <- tolower(stderr_text %||% "")
+  if (grepl("not possible to fast-forward", text)) {
+    return("DIVERGED")
+  }
+  "COMMAND_FAILED"
+}
+
+#' Verify safety and apply a fast-forward-only update to the current branch
+#'
+#' Implements spec Sec 8.6: the working tree must be clean *before*
+#' fetching, since a fast-forward merge writes into the working tree and a
+#' dirty tree can never be checked out over safely; dirty trees are refused
+#' as `DIRTY_BLOCKS_UPDATE` without ever reaching the network (cleanliness
+#' doesn't change from a fetch, so checking against the pre-fetch status is
+#' equivalent and saves the round trip). After a successful fetch, diverged
+#' histories are refused exactly like `.git_push_current_branch()` refuses
+#' them. The update itself always runs as `git merge --ff-only
+#' <fully-qualified remote-tracking ref>` -- never `git pull`, which could
+#' implicitly rebase or perform a non-fast-forward merge.
+#'
+#' @return A list. On success: `ok = TRUE`, `remote`, `remote_branch`,
+#'   `branch`, `sha`, `updated_count` (commits that were behind and are now
+#'   merged in). On failure: `ok = FALSE`, `code`, `message`, `recoverable`.
+#' @noRd
+.git_update_current_branch <- function(repo_root, git_bin) {
+  status <- .git_status(repo_root, git_bin)
+
+  if (status$detached) {
+    return(list(
+      ok = FALSE, code = "DETACHED_HEAD",
+      message = "Check out a branch before getting updates.", recoverable = FALSE
+    ))
+  }
+  upstream_info <- .git_upstream_info(repo_root, git_bin, status$branch)
+  if (is.null(upstream_info)) {
+    return(list(
+      ok = FALSE, code = "NO_UPSTREAM",
+      message = "This branch has no destination configured on GitHub yet.", recoverable = FALSE
+    ))
+  }
+  if (status$has_changes) {
+    return(list(
+      ok = FALSE, code = "DIRTY_BLOCKS_UPDATE",
+      message = "Save or clear your unsaved changes before getting updates.", recoverable = TRUE
+    ))
+  }
+
+  fetch_result <- processx::run(
+    git_bin, c("-C", repo_root, "fetch", upstream_info$remote),
+    error_on_status = FALSE, timeout = 60
+  )
+  if (!identical(fetch_result$status, 0L)) {
+    return(list(
+      ok = FALSE, code = .classify_fetch_failure(fetch_result$stderr),
+      message = "Could not reach GitHub to get updates.", recoverable = TRUE
+    ))
+  }
+
+  fresh_status <- .git_status(repo_root, git_bin)
+  if (fresh_status$ahead > 0L && fresh_status$behind > 0L) {
+    return(list(
+      ok = FALSE, code = "DIVERGED",
+      message = paste(
+        "This computer and GitHub both have work the other does not.",
+        "Combining them requires a person to choose how the changes fit together."
+      ),
+      recoverable = FALSE
+    ))
+  }
+
+  remote_ref <- paste0("refs/remotes/", upstream_info$remote, "/", upstream_info$branch)
+  merge_result <- processx::run(
+    git_bin, c("-C", repo_root, "merge", "--ff-only", remote_ref),
+    error_on_status = FALSE, timeout = 30
+  )
+  if (!identical(merge_result$status, 0L)) {
+    return(list(
+      ok = FALSE, code = .classify_update_failure(merge_result$stderr),
+      message = "Could not safely apply that update.", recoverable = TRUE
+    ))
+  }
+
+  sha <- trimws(processx::run(
+    git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"),
+    error_on_status = TRUE, timeout = 15
+  )$stdout)
+
+  list(
+    ok = TRUE,
+    remote = upstream_info$remote,
+    remote_branch = upstream_info$branch,
+    branch = status$branch,
+    sha = sha,
+    updated_count = fresh_status$behind
+  )
+}
