@@ -60,31 +60,3 @@ stop_session <- function(session = NULL, port = NULL, host = "127.0.0.1") {
   }
   .stop_server_on_port(host, port)
 }
-
-#' Diagnose whether gitneighbr can run against a repository
-#'
-#' Read-only: never starts a server or mutates anything.
-#'
-#' @inheritParams open_repo
-#' @return An invisible list of diagnostic checks, also printed.
-#' @export
-doctor <- function(path = ".", git = getOption("gitneighbr.git", Sys.which("git"))) {
-  checks <- list(
-    git_found = nzchar(git),
-    git_runs = nzchar(git) && .git_available(git),
-    inside_repo = FALSE
-  )
-  if (checks$git_runs) {
-    checks$inside_repo <- !is.null(.git_root(path, git))
-  }
-
-  cat(
-    "gitneighbr doctor\n",
-    "  git executable found: ", checks$git_found, " (", git, ")\n",
-    "  git executable runs:  ", checks$git_runs, "\n",
-    "  inside a Git repo:    ", checks$inside_repo, "\n",
-    sep = ""
-  )
-
-  invisible(checks)
-}
