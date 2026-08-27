@@ -39,9 +39,12 @@
   # `function(x) ...` serializer) - re-registering `reqres::format_json`
   # with `auto_unbox` pre-bound to TRUE restores the behaviour
   # plumber1/most JSON APIs use, without reimplementing the serializer.
+  # `null = "null"` is likewise pre-bound: the default ("list") serializes
+  # an R `NULL` as `{}`, but the spec's envelope shape (`"error": null`,
+  # optional fields like `old_path` absent) requires JSON `null`.
   plumber2::register_serializer(
     "json",
-    function(...) reqres::format_json(..., auto_unbox = TRUE),
+    function(...) reqres::format_json(..., auto_unbox = TRUE, null = "null"),
     mime_type = "application/json",
     default = TRUE
   )
@@ -79,6 +82,41 @@
         unstaged_count = status$unstaged_count %||% 0L,
         untracked_count = status$untracked_count %||% 0L
       ))
+    }) |>
+    plumber2::api_get("/api/v1/changes", function(request) {
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      .ok_envelope(list(changes = .git_changes(repo_root, git_bin)))
+    }) |>
+    plumber2::api_get("/api/v1/diff", function(request) {
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+
+      path <- request$query$path %||% ""
+      if (!.validate_repo_relative_path(repo_root, path)) {
+        return(.error_envelope(
+          "PATH_OUTSIDE_REPOSITORY",
+          "That path is not inside this repository.",
+          recoverable = FALSE
+        ))
+      }
+
+      offset_lines <- suppressWarnings(as.integer(request$query$offset_lines %||% "0"))
+      if (is.na(offset_lines) || offset_lines < 0L) {
+        offset_lines <- 0L
+      }
+
+      result <- .git_diff(repo_root, git_bin, path, offset_lines = offset_lines)
+      if (!result$found) {
+        return(.error_envelope("COMMAND_FAILED", "That path has no pending changes to show."))
+      }
+      .ok_envelope(result[names(result) != "found"])
     })
 }
 
