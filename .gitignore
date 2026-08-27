@@ -1,0 +1,14 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rcheck/
+*.tar.gz
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+frontend/bun.lockb.bak
+
+# editor / OS
+.DS_Store
