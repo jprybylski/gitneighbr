@@ -271,6 +271,30 @@
         return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
       }
       .ok_envelope(list(remote = result$remote, name = result$name))
+    }) |>
+    plumber2::api_post("/api/v1/restore", function(request) {
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+
+      body <- tryCatch(
+        {
+          do.call(request$parse, plumber2::get_parsers())
+          request$body %||% list()
+        },
+        error = function(e) NULL
+      )
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+
+      result <- .git_restore_tracked_file(repo_root, git_bin, path = body$path)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+      }
+      .ok_envelope(list(path = result$path))
     })
 }
 
