@@ -57,7 +57,10 @@
 #'
 #' @return A list of entries, each a list with `kind` (`"ordinary"`,
 #'   `"rename"`, `"untracked"`, or `"conflicted"`), `path`, `old_path`
-#'   (`NULL` unless `kind == "rename"`), `deleted_flag`, and `new_flag`.
+#'   (`NULL` unless `kind == "rename"`), `deleted_flag`, `new_flag`, and
+#'   `staged` (whether the index entry (`X` column) already differs from
+#'   `HEAD`; always `FALSE` for `"untracked"` and `"conflicted"` kinds,
+#'   which have no single well-defined staged/unstaged split).
 #' @noRd
 .git_status_entries <- function(repo_root, git_bin) {
   raw <- .run_git_raw(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "-z", "--branch"))
@@ -79,16 +82,19 @@
       entries[[length(entries) + 1L]] <- list(
         kind = "ordinary", path = path, old_path = NULL,
         deleted_flag = (x == "D" || y == "D"),
-        new_flag = (x == "A" || y == "A")
+        new_flag = (x == "A" || y == "A"),
+        staged = (x != ".")
       )
       i <- i + 1L
     } else if (kind == "2") {
       m <- regmatches(field, regexec("^2 (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) (.*)$", field))[[1]]
+      xy <- m[[2]]
       path <- m[[10]]
       old_path <- fields[[i + 1L]]
       entries[[length(entries) + 1L]] <- list(
         kind = "rename", path = path, old_path = old_path,
-        deleted_flag = FALSE, new_flag = FALSE
+        deleted_flag = FALSE, new_flag = FALSE,
+        staged = (substr(xy, 1, 1) != ".")
       )
       i <- i + 2L
     } else if (kind == "u") {
@@ -96,13 +102,13 @@
       path <- m[[11]]
       entries[[length(entries) + 1L]] <- list(
         kind = "conflicted", path = path, old_path = NULL,
-        deleted_flag = FALSE, new_flag = FALSE
+        deleted_flag = FALSE, new_flag = FALSE, staged = FALSE
       )
       i <- i + 1L
     } else if (kind == "?") {
       entries[[length(entries) + 1L]] <- list(
         kind = "untracked", path = substr(field, 3, nchar(field)), old_path = NULL,
-        deleted_flag = FALSE, new_flag = TRUE
+        deleted_flag = FALSE, new_flag = TRUE, staged = FALSE
       )
       i <- i + 1L
     } else {

@@ -81,9 +81,31 @@
   let diffError = $state<string | null>(null);
   let diffLoading = $state(false);
 
+  let summary = $state("");
+  let details = $state("");
+  let committing = $state(false);
+  let commitError = $state<string | null>(null);
+  let commitSuccess = $state<string | null>(null);
+
+  const summaryLength = $derived(summary.trim().length);
+  const summaryValid = $derived(summaryLength >= 3 && summaryLength <= 72);
+  const canSave = $derived(selected.size > 0 && summaryValid && !committing);
+
   async function api<T>(path: string): Promise<Envelope<T>> {
     const res = await fetch(path, {
       headers: { Authorization: `Bearer ${token}` },
+    });
+    return (await res.json()) as Envelope<T>;
+  }
+
+  async function postApi<T>(path: string, body: unknown): Promise<Envelope<T>> {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
     });
     return (await res.json()) as Envelope<T>;
   }
@@ -126,6 +148,34 @@
       next.add(path);
     }
     selected = next;
+  }
+
+  async function saveSnapshot() {
+    if (!canSave) return;
+    commitError = null;
+    commitSuccess = null;
+    committing = true;
+    try {
+      const envelope = await postApi<{ sha: string; summary: string }>("/api/v1/commit", {
+        paths: Array.from(selected),
+        summary: summary.trim(),
+        details: details.trim() || undefined,
+      });
+      if (!envelope.ok || !envelope.data) {
+        commitError = envelope.error?.message ?? "Could not save this snapshot.";
+      } else {
+        commitSuccess = `Saved snapshot ${envelope.data.sha}.`;
+        summary = "";
+        details = "";
+        activePath = null;
+        diff = null;
+        await loadStatus();
+      }
+    } catch (err) {
+      commitError = err instanceof Error ? err.message : "Could not reach the gitneighbr server.";
+    } finally {
+      committing = false;
+    }
   }
 
   async function openDiff(path: string) {
@@ -253,6 +303,43 @@
         </ul>
       </section>
 
+      <section class="commit-form" aria-label="Save a snapshot">
+        <h2>Save snapshot</h2>
+        <p class="selection-count">
+          {selected.size} of {changes.length} file{changes.length === 1 ? "" : "s"} selected
+        </p>
+        <label class="field" for="commit-summary">
+          Summary <span class="required">(required, 3-72 characters)</span>
+        </label>
+        <input
+          id="commit-summary"
+          type="text"
+          maxlength="72"
+          bind:value={summary}
+          placeholder="What changed?"
+          disabled={committing}
+        />
+        <label class="field" for="commit-details">Details <span class="optional">(optional)</span></label>
+        <textarea
+          id="commit-details"
+          rows="3"
+          bind:value={details}
+          placeholder="Add more explanation if it helps"
+          disabled={committing}
+        ></textarea>
+
+        {#if commitError}
+          <div class="card error" role="alert"><p>{commitError}</p></div>
+        {/if}
+        {#if commitSuccess}
+          <div class="card success" role="status"><p>{commitSuccess}</p></div>
+        {/if}
+
+        <button type="button" class="save-button" disabled={!canSave} onclick={saveSnapshot}>
+          {committing ? "Saving…" : "Save snapshot"}
+        </button>
+      </section>
+
       {#if activePath}
         <section class="diff-pane" aria-label={`Diff for ${activePath}`} aria-live="polite">
           <h2>{activePath}</h2>
@@ -310,6 +397,11 @@
     border-color: #c0392b;
     background: #fdecea;
     color: #922b21;
+  }
+  .card.success {
+    border-color: #1e7e34;
+    background: #eaf7ec;
+    color: #1e7e34;
   }
   .branch {
     font-family: ui-monospace, monospace;
@@ -480,5 +572,57 @@
   .load-more:disabled {
     cursor: default;
     opacity: 0.6;
+  }
+
+  .commit-form {
+    margin-top: 2rem;
+    border: 1px solid #ddd;
+    border-radius: 0.5rem;
+    padding: 1.25rem;
+  }
+  .commit-form h2 {
+    margin-top: 0;
+  }
+  .selection-count {
+    color: #555;
+    margin-top: -0.5rem;
+  }
+  .commit-form .field {
+    display: block;
+    font-weight: 600;
+    margin-top: 1rem;
+    margin-bottom: 0.35rem;
+  }
+  .commit-form .required,
+  .commit-form .optional {
+    font-weight: 400;
+    color: #555;
+  }
+  .commit-form input[type="text"],
+  .commit-form textarea {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid #ccc;
+    border-radius: 0.4rem;
+  }
+  .commit-form textarea {
+    resize: vertical;
+  }
+  .save-button {
+    margin-top: 1.25rem;
+    font: inherit;
+    font-weight: 600;
+    padding: 0.5rem 1.1rem;
+    border: 1px solid #1e7e34;
+    border-radius: 0.4rem;
+    background: #eaf7ec;
+    color: #1e7e34;
+    cursor: pointer;
+  }
+  .save-button:disabled {
+    cursor: default;
+    opacity: 0.5;
   }
 </style>

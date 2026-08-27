@@ -58,7 +58,15 @@
   }
 
   plumber2::api(host = "127.0.0.1") |>
-    plumber2::api_statics(at = "/", path = www_dir, fallthrough = TRUE) |>
+    # `httpuv`'s static-file layer intercepts every request under `at`
+    # (prefix-matched, so "/" means *every* path) before the router ever
+    # sees it, and only knows how to serve GET/HEAD - any other method
+    # anywhere on the site, including a POST to "/api/v1/...", gets a flat
+    # 400 with `fallthrough` having no effect (fallthrough only covers a
+    # missing *file* on GET). `except` tells httpuv to treat that prefix as
+    # not-static at all, handing it to the router (and its own methods)
+    # unmodified.
+    plumber2::api_statics(at = "/", path = www_dir, fallthrough = TRUE, except = "api") |>
     plumber2::api_get("/api/v1/health", function() {
       list(ok = TRUE, data = list(status = "ok"), error = NULL)
     }) |>
@@ -117,6 +125,39 @@
         return(.error_envelope("COMMAND_FAILED", "That path has no pending changes to show."))
       }
       .ok_envelope(result[names(result) != "found"])
+    }) |>
+    plumber2::api_post("/api/v1/commit", function(request) {
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+
+      # `request$parse()` requires an explicit named parser list on every
+      # call (it has no implicit default), so a malformed/absent JSON body
+      # is caught here and turned into the same envelope shape every other
+      # endpoint uses, instead of plumber2's plain-text 400 response.
+      body <- tryCatch(
+        {
+          do.call(request$parse, plumber2::get_parsers())
+          request$body %||% list()
+        },
+        error = function(e) NULL
+      )
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+
+      result <- .git_commit_selected(
+        repo_root, git_bin,
+        selected_paths = body$paths,
+        summary = body$summary,
+        details = body$details
+      )
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+      }
+      .ok_envelope(list(sha = result$sha, summary = result$summary))
     })
 }
 
