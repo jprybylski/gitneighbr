@@ -158,6 +158,48 @@
         return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
       }
       .ok_envelope(list(sha = result$sha, summary = result$summary))
+    }) |>
+    plumber2::api_post("/api/v1/refresh-remote", function(request) {
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+
+      result <- .git_refresh_remote(repo_root, git_bin)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+      }
+      status <- result[names(result) != "ok"]
+      .ok_envelope(list(
+        primary_state = .primary_state(status, TRUE),
+        upstream = status$upstream,
+        branch = status$branch,
+        ahead = status$ahead %||% 0L,
+        behind = status$behind %||% 0L,
+        staged_count = status$staged_count %||% 0L,
+        unstaged_count = status$unstaged_count %||% 0L,
+        untracked_count = status$untracked_count %||% 0L
+      ))
+    }) |>
+    plumber2::api_post("/api/v1/push", function(request) {
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+
+      result <- .git_push_current_branch(repo_root, git_bin)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+      }
+      .ok_envelope(list(
+        remote = result$remote,
+        remote_branch = result$remote_branch,
+        branch = result$branch,
+        sha = result$sha,
+        pushed_count = result$pushed_count
+      ))
     })
 }
 
