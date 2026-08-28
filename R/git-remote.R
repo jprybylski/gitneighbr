@@ -70,6 +70,18 @@
   "COMMAND_FAILED"
 }
 
+#' Attach `.git_credential_diagnosis()` to a failed fetch/push result, but
+#' only when the failure was actually classified as `AUTH_REQUIRED` -- for
+#' any other code (e.g. a network error) the diagnosis would be misleading
+#' noise about credentials that were never the problem.
+#' @noRd
+.diagnosis_for_failure <- function(repo_root, git_bin, code, stderr_text) {
+  if (!identical(code, "AUTH_REQUIRED")) {
+    return(NULL)
+  }
+  .git_credential_diagnosis(repo_root, git_bin, stderr_text = stderr_text)
+}
+
 #' Fetch the configured upstream remote and return refreshed status
 #'
 #' Implements the `/api/v1/refresh-remote` endpoint: this is a read-only
@@ -103,10 +115,12 @@
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
+    code <- .classify_fetch_failure(fetch_result$stderr)
     return(list(
-      ok = FALSE, code = .classify_fetch_failure(fetch_result$stderr),
+      ok = FALSE, code = code,
       message = "Could not reach GitHub to check for updates.", recoverable = TRUE,
-      advanced = .advanced_block(fetch_args, fetch_result)
+      advanced = .advanced_block(fetch_args, fetch_result),
+      diagnosis = .diagnosis_for_failure(repo_root, git_bin, code, fetch_result$stderr)
     ))
   }
 
@@ -149,10 +163,12 @@
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
+    code <- .classify_fetch_failure(fetch_result$stderr)
     return(list(
-      ok = FALSE, code = .classify_fetch_failure(fetch_result$stderr),
+      ok = FALSE, code = code,
       message = "Could not check GitHub for newer work before sending.", recoverable = TRUE,
-      advanced = .advanced_block(fetch_args, fetch_result)
+      advanced = .advanced_block(fetch_args, fetch_result),
+      diagnosis = .diagnosis_for_failure(repo_root, git_bin, code, fetch_result$stderr)
     ))
   }
 
@@ -182,10 +198,12 @@
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(push_result$status, 0L)) {
+    code <- .classify_push_failure(push_result$stderr)
     return(list(
-      ok = FALSE, code = .classify_push_failure(push_result$stderr),
+      ok = FALSE, code = code,
       message = "GitHub rejected this push.", recoverable = TRUE,
-      advanced = .advanced_block(push_args, push_result)
+      advanced = .advanced_block(push_args, push_result),
+      diagnosis = .diagnosis_for_failure(repo_root, git_bin, code, push_result$stderr)
     ))
   }
 
@@ -260,10 +278,12 @@
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
+    code <- .classify_fetch_failure(fetch_result$stderr)
     return(list(
-      ok = FALSE, code = .classify_fetch_failure(fetch_result$stderr),
+      ok = FALSE, code = code,
       message = "Could not reach GitHub to get updates.", recoverable = TRUE,
-      advanced = .advanced_block(fetch_args, fetch_result)
+      advanced = .advanced_block(fetch_args, fetch_result),
+      diagnosis = .diagnosis_for_failure(repo_root, git_bin, code, fetch_result$stderr)
     ))
   }
 

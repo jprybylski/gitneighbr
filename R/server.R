@@ -243,6 +243,15 @@
       }
       .ok_envelope(.git_identity(repo_root, git_bin))
     }) |>
+    plumber2::api_get("/api/v1/credential-diagnosis", function(request) {
+      validate_host(request)
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      .ok_envelope(.git_credential_diagnosis(repo_root, git_bin))
+    }) |>
     plumber2::api_post("/api/v1/identity", function(request, response) {
       validate_host(request)
       require_auth(request)
@@ -358,7 +367,7 @@
         return(.error_envelope(
           result$code, result$message,
           recoverable = result$recoverable %||% TRUE, status_version = payload$version,
-          advanced = result$advanced
+          advanced = result$advanced, diagnosis = result$diagnosis
         ))
       }
       .ok_envelope(list(
@@ -406,7 +415,7 @@
         return(.error_envelope(
           result$code, result$message,
           recoverable = result$recoverable %||% TRUE, status_version = payload$version,
-          advanced = result$advanced
+          advanced = result$advanced, diagnosis = result$diagnosis
         ))
       }
       .ok_envelope(list(
@@ -451,7 +460,7 @@
         return(.error_envelope(
           result$code, result$message,
           recoverable = result$recoverable %||% TRUE, status_version = payload$version,
-          advanced = result$advanced
+          advanced = result$advanced, diagnosis = result$diagnosis
         ))
       }
       .ok_envelope(list(

@@ -215,18 +215,37 @@ doctor <- function(path = ".", git = getOption("gitneighbr.git", unname(Sys.whic
       .doctor_check("remote", "advisory", "The 'origin' remote does not look like GitHub.")
     }
 
-    helpers <- .git_credential_helpers(repo_root, git)
-    checks$credential_helper <- if (length(helpers) > 0L) {
-      .doctor_check(
-        "credential_helper", "ok",
-        paste0("Credential helper configured: ", paste(helpers, collapse = ", "), "."),
-        list(helpers = helpers)
-      )
+    transport <- .git_remote_transport(remote_url)
+    if (identical(transport, "https")) {
+      helpers <- .git_credential_helpers(repo_root, git)
+      checks$credential_helper <- if (length(helpers) > 0L) {
+        .doctor_check(
+          "credential_helper", "ok",
+          paste0("Credential helper configured: ", paste(helpers, collapse = ", "), "."),
+          list(helpers = helpers)
+        )
+      } else {
+        .doctor_check(
+          "credential_helper", "advisory",
+          "No `credential.helper` configured; authenticating to GitHub over HTTPS may prompt outside gitneighbr."
+        )
+      }
+    } else if (identical(transport, "ssh")) {
+      agent <- .ssh_agent_status()
+      checks$ssh_agent <- if (isTRUE(agent$has_keys)) {
+        .doctor_check(
+          "ssh_agent", "ok",
+          paste0("SSH agent is running with ", agent$key_count, " key(s) loaded."),
+          list(key_count = agent$key_count)
+        )
+      } else {
+        .doctor_check(
+          "ssh_agent", "advisory",
+          paste0(agent$detail %||% "No SSH agent with loaded keys was found.", " Authenticating to GitHub over SSH may prompt outside gitneighbr.")
+        )
+      }
     } else {
-      .doctor_check(
-        "credential_helper", "advisory",
-        "No `credential.helper` configured; authenticating to GitHub may prompt outside gitneighbr."
-      )
+      checks$credential_helper <- .doctor_check("credential_helper", "skipped", "Skipped: no remote configured yet.")
     }
 
     hooks <- .active_hooks(repo_root, git)

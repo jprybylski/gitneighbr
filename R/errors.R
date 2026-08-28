@@ -76,8 +76,11 @@
 #' supplied, carries the exact Git command, its exit status, and sanitized
 #' stderr behind the frontend's "Advanced details" disclosure (spec Sec 9.1);
 #' it is omitted (`NULL`) for errors with no underlying failed Git command.
+#' `diagnosis`, when supplied (only ever alongside `code = "AUTH_REQUIRED"`),
+#' carries `.git_credential_diagnosis()`'s platform-appropriate guidance
+#' (spec Sec 16 step 3).
 #' @noRd
-.error_envelope <- function(code, message, recoverable = TRUE, status_version = NULL, data = NULL, advanced = NULL) {
+.error_envelope <- function(code, message, recoverable = TRUE, status_version = NULL, data = NULL, advanced = NULL, diagnosis = NULL) {
   list(
     ok = FALSE,
     data = data,
@@ -86,7 +89,8 @@
       title = .error_title(code),
       message = message,
       recoverable = recoverable,
-      advanced = advanced
+      advanced = advanced,
+      diagnosis = diagnosis
     ),
     status_version = status_version
   )

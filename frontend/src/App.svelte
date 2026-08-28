@@ -53,6 +53,7 @@
     message: string;
     recoverable?: boolean;
     advanced?: AdvancedDetails | null;
+    diagnosis?: CredentialDiagnosis | null;
   };
 
   type Envelope<T> = {
@@ -84,6 +85,15 @@
     email: string | null;
     email_scope: string | null;
     complete: boolean;
+  };
+
+  type CredentialCheck = { id: string; status: "ok" | "fail" | "advisory" | "skipped"; message: string };
+
+  type CredentialDiagnosis = {
+    transport: string | null;
+    platform: string;
+    checks: Record<string, CredentialCheck>;
+    guidance: string[];
   };
 
   const STATE_COPY: Record<string, string> = {
@@ -166,6 +176,16 @@
   let identitySaving = $state(false);
   let identityError = $state<ApiError | null>(null);
   let identitySuccess = $state<string | null>(null);
+
+  // Credential diagnostics (issue #18): loaded once per AUTH_REQUIRED
+  // episode so a user who reloads the page while still locked out still
+  // sees platform-appropriate guidance and a way to retry, not just the
+  // bare state label - `credentialDiagnosisLoaded` resets whenever the
+  // state moves away from AUTH_REQUIRED so the next episode reloads it.
+  let credentialDiagnosisLoaded = false;
+  let credentialDiagnosis = $state<CredentialDiagnosis | null>(null);
+  let authRetrying = $state(false);
+  let authRetryError = $state<ApiError | null>(null);
 
   const summaryLength = $derived(summary.trim().length);
   const summaryValid = $derived(summaryLength >= 3 && summaryLength <= 72);
@@ -269,6 +289,18 @@
       } else {
         status = statusEnvelope.data;
         errorMessage = null;
+      }
+
+      if (status?.primary_state === "AUTH_REQUIRED") {
+        if (!credentialDiagnosisLoaded) {
+          credentialDiagnosisLoaded = true;
+          const diagEnvelope = await api<CredentialDiagnosis>("/api/v1/credential-diagnosis");
+          if (diagEnvelope.ok && diagEnvelope.data) credentialDiagnosis = diagEnvelope.data;
+        }
+      } else {
+        credentialDiagnosisLoaded = false;
+        credentialDiagnosis = null;
+        authRetryError = null;
       }
 
       if (changesEnvelope.ok && changesEnvelope.data) {
@@ -618,6 +650,30 @@
     }
   }
 
+  // Credential diagnostics (issue #18): the AUTH_REQUIRED state is sticky
+  // server-side until a fetch/push succeeds again, so this is the one
+  // retry path that always stays available for it regardless of which
+  // action originally failed - a read-only fetch is enough to clear the
+  // flag (spec Sec 16 step 4: "Offer Retry after the user completes
+  // authentication externally").
+  async function retryConnection() {
+    authRetrying = true;
+    authRetryError = null;
+    try {
+      const envelope = await postApi<Omit<StatusData, "repository">>("/api/v1/refresh-remote", {});
+      if (!envelope.ok) {
+        authRetryError = envelope.error ?? { message: "Still could not connect to GitHub." };
+        if (envelope.error?.diagnosis) credentialDiagnosis = envelope.error.diagnosis;
+      }
+    } catch (err) {
+      authRetryError = describeFetchError(err);
+    } finally {
+      authRetrying = false;
+      await loadStatus();
+      await focusRegion("auth-result");
+    }
+  }
+
   // Guided identity setup (issue #17): a new user is never told to run
   // `git config` - this writes it for them, defaulting to their global
   // identity since who someone is isn't really a per-project fact, with an
@@ -720,6 +776,13 @@
   <div class="card error" role="alert">
     {#if err.title}<p class="error-title">{err.title}</p>{/if}
     <p>{err.message}</p>
+    {#if err.diagnosis && err.diagnosis.guidance.length > 0}
+      <ul class="notices">
+        {#each err.diagnosis.guidance as tip}
+          <li>{tip}</li>
+        {/each}
+      </ul>
+    {/if}
     {#if err.advanced}{@render advancedDetails(err.advanced)}{/if}
   </div>
 {/snippet}
@@ -759,6 +822,27 @@
             <li>{notice.message}</li>
           {/each}
         </ul>
+      {/if}
+      {#if status.primary_state === "AUTH_REQUIRED"}
+        <section class="identity-section" aria-label="Reconnect to GitHub">
+          <h3>Reconnecting to GitHub</h3>
+          <p>gitneighbr could not verify your access the last time it checked GitHub. Your saved work is safe.</p>
+          {#if credentialDiagnosis && credentialDiagnosis.guidance.length > 0}
+            <ul class="notices">
+              {#each credentialDiagnosis.guidance as tip}
+                <li>{tip}</li>
+              {/each}
+            </ul>
+          {/if}
+          <div id="auth-result" tabindex="-1">
+            {#if authRetryError}
+              {@render errorCard(authRetryError)}
+            {/if}
+          </div>
+          <button type="button" class="update-button" disabled={authRetrying} onclick={retryConnection}>
+            {authRetrying ? "Checking…" : "Retry connecting to GitHub"}
+          </button>
+        </section>
       {/if}
       {#if identityNeeded}
         <section class="identity-section" aria-label="Set up your Git identity">
