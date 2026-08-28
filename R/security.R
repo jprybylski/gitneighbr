@@ -37,3 +37,44 @@
   }
   identical(charToRaw(supplied), charToRaw(expected))
 }
+
+#' Redact secrets and unnecessary home-directory disclosure from raw Git output
+#'
+#' Implements spec Sec 15's sanitization requirement for anything from raw
+#' Git stderr (or an assembled command line) that might reach the browser or
+#' logs via an error's `advanced` block: embedded URL credentials
+#' (`https://user:pass@host`), `Authorization: Bearer` tokens, GitHub's
+#' PAT-shaped tokens (`ghp_...`, `gho_...`, etc.), common `key=value`/`key:
+#' value` credential patterns, and the user's home directory (collapsed to
+#' `~`, matching spec Sec 14.2's "prefer a home-relative display path").
+#' Best-effort by nature -- this is a diagnostic aid, not a guarantee that no
+#' novel credential shape ever leaks -- so callers must still avoid needless
+#' disclosure upstream rather than relying on this alone.
+#' @noRd
+.sanitize_git_output <- function(text) {
+  if (is.null(text) || length(text) != 1L || is.na(text) || !nzchar(text)) {
+    return("")
+  }
+  x <- text
+
+  # Embedded URL credentials: https://user:pass@host -> https://***@host
+  x <- gsub("(https?://)[^/@\\s]+:[^/@\\s]+@", "\\1***@", x, perl = TRUE)
+  # Authorization: Bearer <token>
+  x <- gsub("(?i)(bearer\\s+)\\S+", "\\1***", x, perl = TRUE)
+  # GitHub PAT-shaped tokens anywhere in the text
+  x <- gsub("\\bgh[pousr]_[A-Za-z0-9]{20,}\\b", "***", x, perl = TRUE)
+  # Common `key=value` / `key: value` credential-looking fields
+  x <- gsub("(?i)\\b(password|passwd|token|secret|api[_-]?key)\\s*[:=]\\s*\\S+", "\\1=***", x, perl = TRUE)
+
+  # Home-directory disclosure: collapse the user's home directory to '~'.
+  # Longer of the two candidate spellings first, so e.g. a trailing slash
+  # variant doesn't leave a stray fragment behind.
+  home_candidates <- unique(c(path.expand("~"), Sys.getenv("HOME", "")))
+  home_candidates <- home_candidates[nzchar(home_candidates)]
+  home_candidates <- home_candidates[order(-nchar(home_candidates))]
+  for (home in home_candidates) {
+    x <- gsub(home, "~", x, fixed = TRUE)
+  }
+
+  x
+}

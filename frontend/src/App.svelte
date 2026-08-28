@@ -39,10 +39,23 @@
     truncated: boolean;
   };
 
+  type AdvancedDetails = { command: string; exit_status: number; stderr: string };
+
+  // `title` and `advanced` are always present on a real API error (spec
+  // Sec 14/15), but this type also covers the frontend's own
+  // network/parse-failure messages, which have neither.
+  type ApiError = {
+    code?: string;
+    title?: string;
+    message: string;
+    recoverable?: boolean;
+    advanced?: AdvancedDetails | null;
+  };
+
   type Envelope<T> = {
     ok: boolean;
     data: T | null;
-    error: { code: string; message: string; recoverable: boolean } | null;
+    error: (ApiError & { code: string; title: string; recoverable: boolean }) | null;
     status_version: number | null;
   };
 
@@ -89,24 +102,24 @@
   let statusVersion = $state<number | null>(null);
   let changes = $state<ChangeEntry[]>([]);
   let selected = $state<Set<string>>(new Set());
-  let errorMessage = $state<string | null>(null);
+  let errorMessage = $state<ApiError | null>(null);
   let loading = $state(true);
   let statusRequestInFlight = false;
 
   let activePath = $state<string | null>(null);
   let diff = $state<DiffData | null>(null);
-  let diffError = $state<string | null>(null);
+  let diffError = $state<ApiError | null>(null);
   let diffLoading = $state(false);
 
   let summary = $state("");
   let details = $state("");
   let committing = $state(false);
-  let commitError = $state<string | null>(null);
+  let commitError = $state<ApiError | null>(null);
   let commitSuccess = $state<string | null>(null);
 
   let sendToGithub = $state(true);
   let sending = $state(false);
-  let sendError = $state<string | null>(null);
+  let sendError = $state<ApiError | null>(null);
   let sendSuccess = $state<string | null>(null);
   let canRetrySend = $state(false);
 
@@ -173,7 +186,7 @@
       ]);
 
       if (!statusEnvelope.ok || !statusEnvelope.data) {
-        errorMessage = statusEnvelope.error?.message ?? "Request failed.";
+        errorMessage = statusEnvelope.error ?? { message: "Request failed." };
       } else {
         status = statusEnvelope.data;
         errorMessage = null;
@@ -184,7 +197,7 @@
         changes = changesEnvelope.data.changes;
       }
     } catch (err) {
-      errorMessage = err instanceof Error ? err.message : "Could not reach the gitneighbr server.";
+      errorMessage = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
     } finally {
       statusRequestInFlight = false;
     }
@@ -192,7 +205,7 @@
 
   async function loadStatus() {
     if (!token) {
-      errorMessage = "Missing session token. Open this page via gitneighbr::open_repo().";
+      errorMessage = { message: "Missing session token. Open this page via gitneighbr::open_repo()." };
       loading = false;
       return;
     }
@@ -242,7 +255,7 @@
         details: details.trim() || undefined,
       });
       if (!envelope.ok || !envelope.data) {
-        commitError = envelope.error?.message ?? "Could not save this snapshot.";
+        commitError = envelope.error ?? { message: "Could not save this snapshot." };
         return;
       }
       commitSuccess = `Saved snapshot ${envelope.data.sha}.`;
@@ -255,7 +268,7 @@
         await sendSavedSnapshots();
       }
     } catch (err) {
-      commitError = err instanceof Error ? err.message : "Could not reach the gitneighbr server.";
+      commitError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
     } finally {
       committing = false;
     }
@@ -274,19 +287,19 @@
     try {
       const refreshEnvelope = await postApi<Omit<StatusData, "repository">>("/api/v1/refresh-remote", {});
       if (!refreshEnvelope.ok) {
-        sendError = refreshEnvelope.error?.message ?? "Could not check GitHub for updates before sending.";
+        sendError = refreshEnvelope.error ?? { message: "Could not check GitHub for updates before sending." };
         canRetrySend = true;
         return;
       }
       const pushEnvelope = await postApi<PushResult>("/api/v1/push", {});
       if (!pushEnvelope.ok || !pushEnvelope.data) {
-        sendError = pushEnvelope.error?.message ?? "Could not send this snapshot to GitHub.";
+        sendError = pushEnvelope.error ?? { message: "Could not send this snapshot to GitHub." };
         canRetrySend = true;
         return;
       }
       sendSuccess = `Sent to ${pushEnvelope.data.remote}/${pushEnvelope.data.remote_branch}.`;
     } catch (err) {
-      sendError = err instanceof Error ? err.message : "Could not reach the gitneighbr server.";
+      sendError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
       canRetrySend = true;
     } finally {
       sending = false;
@@ -302,12 +315,12 @@
     try {
       const envelope = await api<DiffData>(`/api/v1/diff?path=${encodeURIComponent(path)}`);
       if (!envelope.ok || !envelope.data) {
-        diffError = envelope.error?.message ?? "Could not load this diff.";
+        diffError = envelope.error ?? { message: "Could not load this diff." };
       } else {
         diff = envelope.data;
       }
     } catch (err) {
-      diffError = err instanceof Error ? err.message : "Could not reach the gitneighbr server.";
+      diffError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
     } finally {
       diffLoading = false;
     }
@@ -355,6 +368,29 @@
   startPolling();
 </script>
 
+{#snippet advancedDetails(advanced: AdvancedDetails)}
+  <details class="advanced-details">
+    <summary>Advanced details</summary>
+    <dl>
+      <dt>Command</dt>
+      <dd><code>{advanced.command}</code></dd>
+      <dt>Exit status</dt>
+      <dd>{advanced.exit_status}</dd>
+    </dl>
+    {#if advanced.stderr}
+      <pre class="advanced-stderr">{advanced.stderr}</pre>
+    {/if}
+  </details>
+{/snippet}
+
+{#snippet errorCard(err: ApiError)}
+  <div class="card error" role="alert">
+    {#if err.title}<p class="error-title">{err.title}</p>{/if}
+    <p>{err.message}</p>
+    {#if err.advanced}{@render advancedDetails(err.advanced)}{/if}
+  </div>
+{/snippet}
+
 <main>
   <h1>gitneighbr</h1>
   <p class="tagline">Be a good neighbor to your repository.</p>
@@ -362,9 +398,7 @@
   {#if loading}
     <p>Checking repository status&hellip;</p>
   {:else if errorMessage}
-    <div class="card error" role="alert">
-      <p>{errorMessage}</p>
-    </div>
+    {@render errorCard(errorMessage)}
   {:else if status}
     <div class="card" aria-live="polite">
       <h2>{status.repository.root_display}</h2>
@@ -473,7 +507,7 @@
         {/if}
 
         {#if commitError}
-          <div class="card error" role="alert"><p>{commitError}</p></div>
+          {@render errorCard(commitError)}
         {/if}
         {#if commitSuccess}
           <div class="card success" role="status">
@@ -483,7 +517,8 @@
             {:else if sendSuccess}
               <p>{sendSuccess}</p>
             {:else if sendError}
-              <p class="partial-failure">Not yet sent to GitHub: {sendError}</p>
+              <p class="partial-failure">Not yet sent to GitHub: {sendError.message}</p>
+              {#if sendError.advanced}{@render advancedDetails(sendError.advanced)}{/if}
             {/if}
           </div>
         {/if}
@@ -507,7 +542,7 @@
         {#if diffLoading && !diff}
           <p>Loading diff&hellip;</p>
         {:else if diffError}
-          <div class="card error" role="alert"><p>{diffError}</p></div>
+          {@render errorCard(diffError)}
         {:else if diff}
           {#if diff.binary}
             <p class="diff-binary">This is a binary file. No text diff is available.</p>
@@ -557,6 +592,46 @@
     border-color: #c0392b;
     background: #fdecea;
     color: #922b21;
+  }
+  .error-title {
+    font-weight: 600;
+    margin: 0 0 0.25rem;
+  }
+  .advanced-details {
+    margin-top: 0.75rem;
+    font-size: 0.85rem;
+  }
+  .advanced-details summary {
+    cursor: pointer;
+    color: inherit;
+  }
+  .advanced-details dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.25rem 0.75rem;
+    margin: 0.5rem 0 0;
+  }
+  .advanced-details dt {
+    color: inherit;
+    opacity: 0.75;
+  }
+  .advanced-details dd {
+    margin: 0;
+    text-align: left;
+    font-family: ui-monospace, monospace;
+    overflow-wrap: anywhere;
+  }
+  .advanced-stderr {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 0.35rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 12rem;
+    overflow-y: auto;
   }
   .card.success {
     border-color: #1e7e34;

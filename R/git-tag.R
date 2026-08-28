@@ -82,14 +82,17 @@
   writeLines(annotation, msg_file, useBytes = TRUE)
   Sys.chmod(msg_file, "0600")
 
+  tag_args <- c("-C", repo_root, "tag", "-a", name, "-F", msg_file)
   tag_result <- processx::run(
-    git_bin, c("-C", repo_root, "tag", "-a", name, "-F", msg_file),
+    git_bin, tag_args,
     error_on_status = FALSE, timeout = 15
   )
   if (!identical(tag_result$status, 0L)) {
     return(list(
-      ok = FALSE, code = "COMMAND_FAILED",
-      message = "Git could not create that tag.", recoverable = TRUE
+      ok = FALSE,
+      code = if (grepl("gpg|signing|sign the tag", tolower(tag_result$stderr %||% ""))) "SIGNING_FAILED" else "COMMAND_FAILED",
+      message = "Git could not create that tag.", recoverable = TRUE,
+      advanced = .advanced_block(tag_args, tag_result)
     ))
   }
 
@@ -148,14 +151,16 @@
   }
 
   refspec <- paste0("refs/tags/", name, ":refs/tags/", name)
+  push_args <- c("-C", repo_root, "push", upstream_info$remote, refspec)
   push_result <- processx::run(
-    git_bin, c("-C", repo_root, "push", upstream_info$remote, refspec),
+    git_bin, push_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(push_result$status, 0L)) {
     return(list(
       ok = FALSE, code = .classify_tag_push_failure(push_result$stderr),
-      message = "GitHub rejected this version label.", recoverable = TRUE
+      message = "GitHub rejected this version label.", recoverable = TRUE,
+      advanced = .advanced_block(push_args, push_result)
     ))
   }
 

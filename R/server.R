@@ -198,7 +198,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(sha = result$sha, summary = result$summary), status_version = payload$version)
@@ -224,7 +225,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(
@@ -259,7 +261,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(
@@ -291,7 +294,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(
@@ -325,7 +329,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(name = result$name, sha = result$sha), status_version = payload$version)
@@ -355,7 +360,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(remote = result$remote, name = result$name), status_version = payload$version)
@@ -380,7 +386,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(path = result$path), status_version = payload$version)
@@ -405,7 +412,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(path = result$path), status_version = payload$version)
@@ -430,7 +438,8 @@
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
           result$code, result$message,
-          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
         ))
       }
       .ok_envelope(list(path = result$path, rule = result$rule, added = result$added), status_version = payload$version)

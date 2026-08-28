@@ -24,15 +24,49 @@ open_repo <- function(path = ".",
                        git = getOption("gitneighbr.git", unname(Sys.which("git")))) {
   git <- unname(git)
   if (!nzchar(git)) {
-    stop("gitneighbr: no `git` executable found. Install Git and ensure it is on PATH.", call. = FALSE)
+    .stop_gitneighbr_error(
+      "GIT_UNAVAILABLE",
+      "gitneighbr: no `git` executable found. Install Git and ensure it is on PATH."
+    )
   }
   if (!.git_available(git)) {
-    stop("gitneighbr: the configured `git` executable at '", git, "' could not be run.", call. = FALSE)
+    .stop_gitneighbr_error(
+      "GIT_UNAVAILABLE",
+      paste0("gitneighbr: the configured `git` executable at '", git, "' could not be run.")
+    )
+  }
+
+  # Only blocks on a Git version that parses and is below the minimum (spec
+  # Sec 10.2); an unparseable version string is not itself grounds to
+  # refuse, since `.git_available()` above already confirmed Git runs.
+  version <- .git_version(git)
+  if (!is.null(version) && utils::compareVersion(version, .min_git_version) < 0) {
+    .stop_gitneighbr_error(
+      "GIT_TOO_OLD",
+      paste0("gitneighbr: Git ", version, " is too old; gitneighbr requires ", .min_git_version, " or later.")
+    )
+  }
+
+  repo_kind <- .git_repo_kind(path, git)
+  if (identical(repo_kind, "bare")) {
+    .stop_gitneighbr_error(
+      "BARE_REPOSITORY",
+      paste0("gitneighbr: '", path, "' is a bare repository (no working tree); gitneighbr needs a working tree.")
+    )
+  }
+  if (!identical(repo_kind, "worktree")) {
+    .stop_gitneighbr_error(
+      "NOT_REPOSITORY",
+      paste0("gitneighbr: '", path, "' is not inside a Git working tree.")
+    )
   }
 
   repo_root <- .git_root(path, git)
   if (is.null(repo_root)) {
-    stop("gitneighbr: '", path, "' is not inside a Git working tree.", call. = FALSE)
+    .stop_gitneighbr_error(
+      "NOT_REPOSITORY",
+      paste0("gitneighbr: '", path, "' is not inside a Git working tree.")
+    )
   }
 
   session <- .gitneighbr_serve(repo_root = repo_root, host = host, port = port, git_bin = git)

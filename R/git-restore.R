@@ -48,14 +48,16 @@
     ))
   }
 
+  restore_args <- c("-C", repo_root, "restore", "--worktree", "--", path)
   restore_result <- processx::run(
-    git_bin, c("-C", repo_root, "restore", "--worktree", "--", path),
+    git_bin, restore_args,
     error_on_status = FALSE, timeout = 15
   )
   if (!identical(restore_result$status, 0L)) {
     return(list(
       ok = FALSE, code = "COMMAND_FAILED",
-      message = "Git could not restore that file.", recoverable = TRUE
+      message = "Git could not restore that file.", recoverable = TRUE,
+      advanced = .advanced_block(restore_args, restore_result)
     ))
   }
 

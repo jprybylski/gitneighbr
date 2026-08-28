@@ -123,6 +123,30 @@ test_that(".git_commit_selected refuses an empty commit and restores the index",
   expect_equal(status$staged_count, 1L) # index restored to its pre-operation (still-staged) state
 })
 
+test_that(".git_commit_selected reports HOOK_FAILED with a sanitized advanced block when a pre-commit hook rejects", {
+  repo <- local_git_repo()
+  hooks_dir <- file.path(repo$dir, ".git", "hooks")
+  hook_path <- file.path(hooks_dir, "pre-commit")
+  home <- path.expand("~")
+  writeLines(
+    c("#!/bin/sh", paste0("echo 'fatal: rejected by hook at ", home, "/secrets' >&2"), "exit 1"),
+    hook_path
+  )
+  Sys.chmod(hook_path, "0755")
+  writeLines("hello", file.path(repo$dir, "a.txt"))
+
+  result <- .git_commit_selected(repo$dir, repo$git, "a.txt", summary = "Add a.txt")
+  expect_false(result$ok)
+  expect_equal(result$code, "HOOK_FAILED")
+  expect_match(result$advanced$command, "^git -C .* commit -F .*$")
+  expect_equal(result$advanced$exit_status, 1L)
+  expect_false(grepl(home, result$advanced$stderr, fixed = TRUE))
+  expect_match(result$advanced$stderr, "~/secrets", fixed = TRUE)
+
+  status <- .git_status(repo$dir, repo$git)
+  expect_equal(status$staged_count, 0L) # index restored, nothing left staged
+})
+
 test_that(".git_commit_selected uses the summary and details as the commit message", {
   repo <- local_git_repo()
   writeLines("hi", file.path(repo$dir, "a.txt"))

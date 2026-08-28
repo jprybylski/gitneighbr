@@ -97,14 +97,16 @@
     ))
   }
 
+  fetch_args <- c("-C", repo_root, "fetch", upstream_info$remote)
   fetch_result <- processx::run(
-    git_bin, c("-C", repo_root, "fetch", upstream_info$remote),
+    git_bin, fetch_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
     return(list(
       ok = FALSE, code = .classify_fetch_failure(fetch_result$stderr),
-      message = "Could not reach GitHub to check for updates.", recoverable = TRUE
+      message = "Could not reach GitHub to check for updates.", recoverable = TRUE,
+      advanced = .advanced_block(fetch_args, fetch_result)
     ))
   }
 
@@ -141,14 +143,16 @@
     ))
   }
 
+  fetch_args <- c("-C", repo_root, "fetch", upstream_info$remote)
   fetch_result <- processx::run(
-    git_bin, c("-C", repo_root, "fetch", upstream_info$remote),
+    git_bin, fetch_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
     return(list(
       ok = FALSE, code = .classify_fetch_failure(fetch_result$stderr),
-      message = "Could not check GitHub for newer work before sending.", recoverable = TRUE
+      message = "Could not check GitHub for newer work before sending.", recoverable = TRUE,
+      advanced = .advanced_block(fetch_args, fetch_result)
     ))
   }
 
@@ -172,14 +176,16 @@
   }
 
   refspec <- paste0(status$branch, ":", upstream_info$branch)
+  push_args <- c("-C", repo_root, "push", upstream_info$remote, refspec)
   push_result <- processx::run(
-    git_bin, c("-C", repo_root, "push", upstream_info$remote, refspec),
+    git_bin, push_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(push_result$status, 0L)) {
     return(list(
       ok = FALSE, code = .classify_push_failure(push_result$stderr),
-      message = "GitHub rejected this push.", recoverable = TRUE
+      message = "GitHub rejected this push.", recoverable = TRUE,
+      advanced = .advanced_block(push_args, push_result)
     ))
   }
 
@@ -248,14 +254,16 @@
     ))
   }
 
+  fetch_args <- c("-C", repo_root, "fetch", upstream_info$remote)
   fetch_result <- processx::run(
-    git_bin, c("-C", repo_root, "fetch", upstream_info$remote),
+    git_bin, fetch_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
     return(list(
       ok = FALSE, code = .classify_fetch_failure(fetch_result$stderr),
-      message = "Could not reach GitHub to get updates.", recoverable = TRUE
+      message = "Could not reach GitHub to get updates.", recoverable = TRUE,
+      advanced = .advanced_block(fetch_args, fetch_result)
     ))
   }
 
@@ -272,14 +280,16 @@
   }
 
   remote_ref <- paste0("refs/remotes/", upstream_info$remote, "/", upstream_info$branch)
+  merge_args <- c("-C", repo_root, "merge", "--ff-only", remote_ref)
   merge_result <- processx::run(
-    git_bin, c("-C", repo_root, "merge", "--ff-only", remote_ref),
+    git_bin, merge_args,
     error_on_status = FALSE, timeout = 30
   )
   if (!identical(merge_result$status, 0L)) {
     return(list(
       ok = FALSE, code = .classify_update_failure(merge_result$stderr),
-      message = "Could not safely apply that update.", recoverable = TRUE
+      message = "Could not safely apply that update.", recoverable = TRUE,
+      advanced = .advanced_block(merge_args, merge_result)
     ))
   }
 

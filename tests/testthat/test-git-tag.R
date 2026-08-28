@@ -136,6 +136,9 @@ test_that(".git_push_tag refuses to move a tag the remote already has", {
   result <- .git_push_tag(repo$dir, repo$git, "v1.0.0")
   expect_false(result$ok)
   expect_equal(result$code, "TAG_EXISTS")
+  expect_match(result$advanced$command, "^git -C .* push origin refs/tags/v1\\.0\\.0:refs/tags/v1\\.0\\.0$")
+  expect_equal(result$advanced$exit_status, 1L)
+  expect_true(nzchar(result$advanced$stderr))
 })
 
 test_that(".git_push_tag fails with NO_UPSTREAM when the branch has none", {

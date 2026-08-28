@@ -116,14 +116,16 @@
   )
   reset_paths <- unique(unlist(lapply(deselected_staged, .commit_entry_paths)))
 
+  tree_args <- c("-C", repo_root, "write-tree")
   tree_result <- processx::run(
-    git_bin, c("-C", repo_root, "write-tree"),
+    git_bin, tree_args,
     error_on_status = FALSE, timeout = 15
   )
   if (!identical(tree_result$status, 0L)) {
     return(list(
       ok = FALSE, code = "COMMAND_FAILED",
-      message = "Could not read the current index.", recoverable = TRUE
+      message = "Could not read the current index.", recoverable = TRUE,
+      advanced = .advanced_block(tree_args, tree_result)
     ))
   }
   original_tree <- trimws(tree_result$stdout)
@@ -133,22 +135,26 @@
   }
 
   if (length(reset_paths) > 0L) {
-    result <- processx::run(git_bin, c("-C", repo_root, "reset", "--", reset_paths), error_on_status = FALSE, timeout = 15)
+    reset_args <- c("-C", repo_root, "reset", "--", reset_paths)
+    result <- processx::run(git_bin, reset_args, error_on_status = FALSE, timeout = 15)
     if (!identical(result$status, 0L)) {
       restore_index()
       return(list(
         ok = FALSE, code = "COMMAND_FAILED",
-        message = "Could not update the saved selection.", recoverable = TRUE
+        message = "Could not update the saved selection.", recoverable = TRUE,
+        advanced = .advanced_block(reset_args, result)
       ))
     }
   }
   if (length(add_paths) > 0L) {
-    result <- processx::run(git_bin, c("-C", repo_root, "add", "--", add_paths), error_on_status = FALSE, timeout = 15)
+    add_args <- c("-C", repo_root, "add", "--", add_paths)
+    result <- processx::run(git_bin, add_args, error_on_status = FALSE, timeout = 15)
     if (!identical(result$status, 0L)) {
       restore_index()
       return(list(
         ok = FALSE, code = "COMMAND_FAILED",
-        message = "Could not stage the selected files.", recoverable = TRUE
+        message = "Could not stage the selected files.", recoverable = TRUE,
+        advanced = .advanced_block(add_args, result)
       ))
     }
   }
@@ -168,12 +174,14 @@
   writeLines(message_text, msg_file, useBytes = TRUE)
   Sys.chmod(msg_file, "0600")
 
-  commit_result <- processx::run(git_bin, c("-C", repo_root, "commit", "-F", msg_file), error_on_status = FALSE, timeout = 30)
+  commit_args <- c("-C", repo_root, "commit", "-F", msg_file)
+  commit_result <- processx::run(git_bin, commit_args, error_on_status = FALSE, timeout = 30)
   if (!identical(commit_result$status, 0L)) {
     restore_index()
     return(list(
       ok = FALSE, code = .classify_commit_failure(commit_result$stderr),
-      message = "Git rejected this snapshot.", recoverable = TRUE
+      message = "Git rejected this snapshot.", recoverable = TRUE,
+      advanced = .advanced_block(commit_args, commit_result)
     ))
   }
 
