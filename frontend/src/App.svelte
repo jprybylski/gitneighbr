@@ -78,6 +78,14 @@
     updated_count: number;
   };
 
+  type IdentityData = {
+    name: string | null;
+    name_scope: string | null;
+    email: string | null;
+    email_scope: string | null;
+    complete: boolean;
+  };
+
   const STATE_COPY: Record<string, string> = {
     READY: "Everything is saved and up to date.",
     CHANGES_ONLY: "You have unsaved changes.",
@@ -151,6 +159,14 @@
   let updateError = $state<ApiError | null>(null);
   let updateSuccess = $state<string | null>(null);
 
+  let identityLoaded = false;
+  let identityName = $state("");
+  let identityEmail = $state("");
+  let identityLocalOnly = $state(false);
+  let identitySaving = $state(false);
+  let identityError = $state<ApiError | null>(null);
+  let identitySuccess = $state<string | null>(null);
+
   const summaryLength = $derived(summary.trim().length);
   const summaryValid = $derived(summaryLength >= 3 && summaryLength <= 72);
   const tagNameValid = $derived(!markAsVersion || tagName.trim().length > 0);
@@ -163,6 +179,11 @@
   // the commit form (and its embedded Send button) never renders - this is
   // the only way to trigger "Send to GitHub" when there's nothing to save.
   const canSendStandalone = $derived(canSend && changes.length === 0 && status?.ahead != null && status.ahead > 0 && !sending);
+  const identityNeeded = $derived(status?.notices.some((n) => n.code === "IDENTITY_INCOMPLETE") ?? false);
+  const otherNotices = $derived(status?.notices.filter((n) => n.code !== "IDENTITY_INCOMPLETE") ?? []);
+  const identityValid = $derived(
+    identityName.trim().length > 0 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identityEmail.trim()),
+  );
 
   // spec Sec 9.6: "Focus moves to the result or error summary after an
   // operation." Each result region below has a stable `id` and
@@ -237,9 +258,10 @@
     if (!token || statusRequestInFlight) return;
     statusRequestInFlight = true;
     try {
-      const [statusEnvelope, changesEnvelope] = await Promise.all([
+      const [statusEnvelope, changesEnvelope, identityEnvelope] = await Promise.all([
         api<StatusData>("/api/v1/status"),
         api<{ changes: ChangeEntry[] }>("/api/v1/changes"),
+        api<IdentityData>("/api/v1/identity"),
       ]);
 
       if (!statusEnvelope.ok || !statusEnvelope.data) {
@@ -252,6 +274,14 @@
       if (changesEnvelope.ok && changesEnvelope.data) {
         selected = reconcileSelection(changes, changesEnvelope.data.changes);
         changes = changesEnvelope.data.changes;
+      }
+
+      // Prefill only once: the user may be mid-edit on a later poll, and a
+      // background refresh must never clobber what they're typing.
+      if (identityEnvelope.ok && identityEnvelope.data && !identityLoaded) {
+        identityName = identityEnvelope.data.name ?? "";
+        identityEmail = identityEnvelope.data.email ?? "";
+        identityLoaded = true;
       }
     } catch (err) {
       errorMessage = describeFetchError(err);
@@ -588,6 +618,36 @@
     }
   }
 
+  // Guided identity setup (issue #17): a new user is never told to run
+  // `git config` - this writes it for them, defaulting to their global
+  // identity since who someone is isn't really a per-project fact, with an
+  // explicit opt-out for someone who deliberately wants a different
+  // identity in just this repository.
+  async function saveIdentity() {
+    if (!identityValid) return;
+    identityError = null;
+    identitySuccess = null;
+    identitySaving = true;
+    try {
+      const envelope = await postApi<{ name: string; email: string; scope: string }>("/api/v1/identity", {
+        name: identityName.trim(),
+        email: identityEmail.trim(),
+        scope: identityLocalOnly ? "local" : "global",
+      });
+      if (!envelope.ok || !envelope.data) {
+        identityError = envelope.error ?? { message: "Could not save your Git identity." };
+      } else {
+        identitySuccess = `Saved as ${envelope.data.name} <${envelope.data.email}>.`;
+        await refresh();
+      }
+    } catch (err) {
+      identityError = describeFetchError(err);
+    } finally {
+      identitySaving = false;
+      await focusRegion("identity-result");
+    }
+  }
+
   async function loadMoreDiff() {
     if (!diff || !activePath) return;
     const path = activePath;
@@ -693,12 +753,53 @@
           <dd>{status.conflicted_count}</dd>
         {/if}
       </dl>
-      {#if status.notices.length > 0}
+      {#if otherNotices.length > 0}
         <ul class="notices">
-          {#each status.notices as notice (notice.code)}
+          {#each otherNotices as notice (notice.code)}
             <li>{notice.message}</li>
           {/each}
         </ul>
+      {/if}
+      {#if identityNeeded}
+        <section class="identity-section" aria-label="Set up your Git identity">
+          <h3>Before your first snapshot</h3>
+          <p>Git needs to know who's making changes. This is saved once and reused automatically.</p>
+          <label class="field" for="identity-name">Your name</label>
+          <input
+            id="identity-name"
+            type="text"
+            bind:value={identityName}
+            placeholder="Ada Lovelace"
+            disabled={identitySaving}
+          />
+          <label class="field" for="identity-email">Your email</label>
+          <input
+            id="identity-email"
+            type="email"
+            bind:value={identityEmail}
+            placeholder="ada@example.com"
+            disabled={identitySaving}
+          />
+          <label class="field-inline">
+            <input type="checkbox" bind:checked={identityLocalOnly} disabled={identitySaving} />
+            Just for this project
+          </label>
+          <div id="identity-result" tabindex="-1">
+            {#if identityError}
+              {@render errorCard(identityError)}
+            {:else if identitySuccess}
+              <p class="update-success" role="status">{identitySuccess}</p>
+            {/if}
+          </div>
+          <button
+            type="button"
+            class="update-button"
+            disabled={!identityValid || identitySaving}
+            onclick={saveIdentity}
+          >
+            {identitySaving ? "Saving…" : "Save my name and email"}
+          </button>
+        </section>
       {/if}
       {#if canUpdate || updateError || updateSuccess}
         <div class="update-section">
@@ -1108,6 +1209,40 @@
     margin-top: 0.25rem;
   }
   .update-section {
+    margin-top: 1rem;
+  }
+  .identity-section {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    border: 1px solid #eee;
+    border-radius: 0.4rem;
+    background: #fafafa;
+  }
+  .identity-section h3 {
+    margin: 0 0 0.35rem;
+    font-size: 1rem;
+  }
+  .identity-section p {
+    margin: 0 0 0.5rem;
+    color: #555;
+    font-size: 0.9rem;
+  }
+  .identity-section .field {
+    display: block;
+    font-weight: 600;
+    margin-top: 0.75rem;
+    margin-bottom: 0.35rem;
+  }
+  .identity-section input[type="text"],
+  .identity-section input[type="email"] {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid #ccc;
+    border-radius: 0.4rem;
+  }
+  .identity-section .update-button {
     margin-top: 1rem;
   }
   .update-button {

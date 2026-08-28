@@ -157,6 +157,10 @@
     notices[[length(notices) + 1L]] <<- list(code = code, message = message)
   }
 
+  if (!isTRUE(.git_identity(repo_root, git_bin)$complete)) {
+    add("IDENTITY_INCOMPLETE", "Git needs your name and email before you can save a snapshot.")
+  }
+
   if ((status$untracked_count %||% 0L) > 0L) {
     add("UNTRACKED_PRESENT", "There are untracked files in this repository.")
   }

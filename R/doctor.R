@@ -239,6 +239,25 @@ doctor <- function(path = ".", git = getOption("gitneighbr.git", unname(Sys.whic
     } else {
       .doctor_check("hooks", "ok", "No active commit/push hooks.")
     }
+
+    identity <- .git_identity(repo_root, git)
+    checks$identity <- if (isTRUE(identity$complete)) {
+      .doctor_check(
+        "identity", "ok",
+        paste0("Git identity: ", identity$name, " <", identity$email, ">."),
+        list(name = identity$name, email = identity$email)
+      )
+    } else if (is.null(identity$name) && is.null(identity$email)) {
+      .doctor_check(
+        "identity", "advisory",
+        "No Git identity (name/email) configured yet; gitneighbr will help you set it before your first snapshot."
+      )
+    } else {
+      .doctor_check(
+        "identity", "advisory",
+        "Git identity is only partially configured; gitneighbr will help you finish it before your first snapshot."
+      )
+    }
   }
 
   report <- structure(

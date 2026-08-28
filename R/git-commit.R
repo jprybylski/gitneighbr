@@ -16,6 +16,9 @@
 #' @noRd
 .classify_commit_failure <- function(stderr_text) {
   text <- tolower(stderr_text %||% "")
+  if (grepl("please tell me who you are|unable to auto-detect email|empty ident name", text)) {
+    return("IDENTITY_MISSING")
+  }
   if (grepl("hook", text, fixed = TRUE)) {
     return("HOOK_FAILED")
   }
