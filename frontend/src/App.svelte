@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { tick } from "svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+
   type Notice = { code: string; message: string };
 
   type StatusData = {
@@ -67,6 +70,14 @@
     pushed_count: number;
   };
 
+  type UpdateResult = {
+    remote: string;
+    remote_branch: string;
+    branch: string;
+    sha: string;
+    updated_count: number;
+  };
+
   const STATE_COPY: Record<string, string> = {
     READY: "Everything is saved and up to date.",
     CHANGES_ONLY: "You have unsaved changes.",
@@ -123,12 +134,41 @@
   let sendSuccess = $state<string | null>(null);
   let canRetrySend = $state(false);
 
+  let markAsVersion = $state(false);
+  let tagName = $state("");
+  let tagAnnotation = $state("");
+  let taggedName = $state<string | null>(null);
+  let tagError = $state<ApiError | null>(null);
+  let tagPushError = $state<ApiError | null>(null);
+  let canRetryTagPush = $state(false);
+
+  let confirmDialog: ConfirmDialog;
+  let rowBusyPath = $state<string | null>(null);
+  let rowError = $state<ApiError | null>(null);
+  let rowSuccess = $state<string | null>(null);
+
+  let updating = $state(false);
+  let updateError = $state<ApiError | null>(null);
+  let updateSuccess = $state<string | null>(null);
+
   const summaryLength = $derived(summary.trim().length);
   const summaryValid = $derived(summaryLength >= 3 && summaryLength <= 72);
+  const tagNameValid = $derived(!markAsVersion || tagName.trim().length > 0);
   const canSend = $derived(status?.upstream != null);
   const willSend = $derived(canSend && sendToGithub);
   const actionLabel = $derived(willSend ? "Save and send" : "Save snapshot");
-  const canSave = $derived(selected.size > 0 && summaryValid && !committing && !sending);
+  const canSave = $derived(selected.size > 0 && summaryValid && tagNameValid && !committing && !sending);
+  const canUpdate = $derived(status?.primary_state === "REMOTE_ONLY_CLEAN" && !updating);
+
+  // spec Sec 9.6: "Focus moves to the result or error summary after an
+  // operation." Each result region below has a stable `id` and
+  // `tabindex="-1"` so it can receive focus programmatically without
+  // joining the normal tab order; `tick()` waits for the just-set state to
+  // actually reach the DOM before the focus call runs.
+  async function focusRegion(id: string) {
+    await tick();
+    document.getElementById(id)?.focus();
+  }
 
   async function api<T>(path: string): Promise<Envelope<T>> {
     const res = await fetch(path, {
@@ -239,6 +279,28 @@
     selected = next;
   }
 
+  // spec Sec 8.5: a tag is only ever created after the triggering commit
+  // succeeds, using the fresh status_version the post-commit status refresh
+  // observed (the commit response's own status_version is already stale by
+  // definition - the commit itself is the change that bumped it).
+  async function createVersionTag() {
+    tagError = null;
+    const name = tagName.trim();
+    const envelope = await postApi<{ name: string; sha: string }>("/api/v1/tag", {
+      name,
+      annotation: tagAnnotation.trim() || undefined,
+    });
+    if (!envelope.ok || !envelope.data) {
+      tagError = envelope.error ?? { message: "Could not create that version label." };
+      taggedName = null;
+      return;
+    }
+    taggedName = envelope.data.name;
+    tagName = "";
+    tagAnnotation = "";
+    markAsVersion = false;
+  }
+
   async function saveSnapshot() {
     if (!canSave) return;
     commitError = null;
@@ -246,7 +308,12 @@
     sendError = null;
     sendSuccess = null;
     canRetrySend = false;
+    tagError = null;
+    tagPushError = null;
+    canRetryTagPush = false;
+    taggedName = null;
     const shouldSend = willSend;
+    const shouldTag = markAsVersion && tagName.trim().length > 0;
     committing = true;
     try {
       const envelope = await postApi<{ sha: string; summary: string }>("/api/v1/commit", {
@@ -264,6 +331,9 @@
       activePath = null;
       diff = null;
       await loadStatus();
+      if (shouldTag) {
+        await createVersionTag();
+      }
       if (shouldSend) {
         await sendSavedSnapshots();
       }
@@ -271,6 +341,7 @@
       commitError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
     } finally {
       committing = false;
+      await focusRegion("commit-result");
     }
   }
 
@@ -279,6 +350,20 @@
   // that already saved locally stays saved even if this fails, so on
   // failure the interface must say so precisely rather than implying the
   // whole "Save and send" action was lost - see `canRetrySend`.
+  // spec Sec 8.5.6-8: the branch is always pushed before the tag, and a
+  // tag-push failure after a successful branch push is reported precisely
+  // as a partial result (the branch push already succeeded) with its own
+  // retry, never folded into `sendError`.
+  async function pushVersionTag(name: string) {
+    tagPushError = null;
+    canRetryTagPush = false;
+    const envelope = await postApi<{ remote: string; name: string }>("/api/v1/push-tag", { name });
+    if (!envelope.ok) {
+      tagPushError = envelope.error ?? { message: "Could not send this version label to GitHub." };
+      canRetryTagPush = true;
+    }
+  }
+
   async function sendSavedSnapshots() {
     sendError = null;
     sendSuccess = null;
@@ -298,12 +383,28 @@
         return;
       }
       sendSuccess = `Sent to ${pushEnvelope.data.remote}/${pushEnvelope.data.remote_branch}.`;
+      if (taggedName) {
+        await pushVersionTag(taggedName);
+      }
     } catch (err) {
       sendError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
       canRetrySend = true;
     } finally {
       sending = false;
       await loadStatus();
+      await focusRegion("commit-result");
+    }
+  }
+
+  async function retryTagPush() {
+    if (!taggedName) return;
+    sending = true;
+    try {
+      await pushVersionTag(taggedName);
+    } finally {
+      sending = false;
+      await loadStatus();
+      await focusRegion("commit-result");
     }
   }
 
@@ -323,6 +424,131 @@
       diffError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
     } finally {
       diffLoading = false;
+      if (diffError) await focusRegion("diff-result");
+    }
+  }
+
+  // spec Sec 8.7: restoring discards the file's current unsaved contents,
+  // so this always confirms first, naming the file and stating the
+  // consequence (point 3) via the shared focus-trapped ConfirmDialog.
+  async function restoreFile(path: string) {
+    const ok = await confirmDialog.confirm({
+      title: "Restore last saved version?",
+      message: `"${path}"'s current unsaved contents will be lost. This cannot be undone.`,
+      confirmLabel: "Restore",
+      danger: true,
+    });
+    if (!ok) return;
+    rowError = null;
+    rowSuccess = null;
+    rowBusyPath = path;
+    try {
+      const envelope = await postApi<{ path: string }>("/api/v1/restore", { path });
+      if (!envelope.ok) {
+        rowError = envelope.error ?? { message: "Could not restore this file." };
+      } else {
+        rowSuccess = `Restored "${path}" to its last saved version.`;
+        if (activePath === path) {
+          activePath = null;
+          diff = null;
+        }
+      }
+      await refresh();
+    } catch (err) {
+      rowError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+    } finally {
+      rowBusyPath = null;
+      await focusRegion("row-result");
+    }
+  }
+
+  // spec Sec 8.8: never git clean, always one named file, always via the
+  // OS trash/recycle bin - confirmed first since it removes the file from
+  // the working tree even though it stays recoverable in the OS trash.
+  async function trashFile(path: string) {
+    const ok = await confirmDialog.confirm({
+      title: "Move to trash?",
+      message: `"${path}" will be moved to this computer's trash or recycle bin.`,
+      confirmLabel: "Move to trash",
+      danger: true,
+    });
+    if (!ok) return;
+    rowError = null;
+    rowSuccess = null;
+    rowBusyPath = path;
+    try {
+      const envelope = await postApi<{ path: string }>("/api/v1/trash", { path });
+      if (!envelope.ok) {
+        rowError = envelope.error ?? { message: "Could not move this file to the trash." };
+      } else {
+        rowSuccess = `Moved "${path}" to the trash.`;
+        selected = new Set([...selected].filter((p) => p !== path));
+        if (activePath === path) {
+          activePath = null;
+          diff = null;
+        }
+      }
+      await refresh();
+    } catch (err) {
+      rowError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+    } finally {
+      rowBusyPath = null;
+      await focusRegion("row-result");
+    }
+  }
+
+  // spec Sec 8.9: the exact proposed rule is shown before writing (point
+  // 3) - the confirm dialog's message doubles as that preview.
+  async function ignoreFile(path: string) {
+    const ok = await confirmDialog.confirm({
+      title: "Stop showing this file?",
+      message: `A rule for "${path}" will be added to .gitignore. It will no longer appear as an untracked change.`,
+      confirmLabel: "Add rule",
+    });
+    if (!ok) return;
+    rowError = null;
+    rowSuccess = null;
+    rowBusyPath = path;
+    try {
+      const envelope = await postApi<{ path: string; rule: string; added: boolean }>("/api/v1/ignore", { path });
+      if (!envelope.ok || !envelope.data) {
+        rowError = envelope.error ?? { message: "Could not update .gitignore." };
+      } else {
+        rowSuccess = envelope.data.added
+          ? `Added "${envelope.data.rule}" to .gitignore.`
+          : `"${path}" was already ignored.`;
+      }
+      await refresh();
+    } catch (err) {
+      rowError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+    } finally {
+      rowBusyPath = null;
+      await focusRegion("row-result");
+    }
+  }
+
+  // spec Sec 8.6: offered only when behind, not ahead, not diverged, and
+  // the working tree is clean (mirrored server-side); never git pull,
+  // always a verified fast-forward that stops without changing anything
+  // local if it isn't possible, so this needs no confirmation.
+  async function getUpdates() {
+    if (!canUpdate) return;
+    updateError = null;
+    updateSuccess = null;
+    updating = true;
+    try {
+      const envelope = await postApi<UpdateResult>("/api/v1/update", {});
+      if (!envelope.ok || !envelope.data) {
+        updateError = envelope.error ?? { message: "Could not get updates from GitHub." };
+      } else {
+        updateSuccess = `Updated to ${envelope.data.sha} from ${envelope.data.remote}/${envelope.data.remote_branch}.`;
+      }
+      await loadStatus();
+    } catch (err) {
+      updateError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+    } finally {
+      updating = false;
+      await focusRegion("update-result");
     }
   }
 
@@ -358,6 +584,17 @@
     return " ";
   }
 
+  // spec Sec 9.4/9.6: the visible "+"/"-" characters already make
+  // additions/deletions readable without color, but they're marked
+  // aria-hidden since a bare glyph reads poorly aloud - this supplies the
+  // screen-reader-only equivalent instead of leaving the line unannounced.
+  function diffLineSrLabel(line: string): string {
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) return "";
+    if (line.startsWith("+")) return "Added: ";
+    if (line.startsWith("-")) return "Removed: ";
+    return "";
+  }
+
   function diffLineText(line: string): string {
     if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) return line;
     if (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) return line.slice(1);
@@ -390,6 +627,8 @@
     {#if err.advanced}{@render advancedDetails(err.advanced)}{/if}
   </div>
 {/snippet}
+
+<ConfirmDialog bind:this={confirmDialog} />
 
 <main>
   <h1>gitneighbr</h1>
@@ -425,6 +664,22 @@
           {/each}
         </ul>
       {/if}
+      {#if canUpdate || updateError || updateSuccess}
+        <div class="update-section">
+          {#if canUpdate}
+            <button type="button" class="update-button" disabled={updating} onclick={getUpdates}>
+              {updating ? "Getting updates…" : "Get updates from GitHub"}
+            </button>
+          {/if}
+          <div id="update-result" tabindex="-1">
+            {#if updateError}
+              {@render errorCard(updateError)}
+            {:else if updateSuccess}
+              <p class="update-success" role="status">{updateSuccess}</p>
+            {/if}
+          </div>
+        </div>
+      {/if}
     </div>
 
     {#if changes.length > 0}
@@ -433,37 +688,83 @@
         <ul class="change-list">
           {#each changes as change (change.path)}
             <li class="change-row" class:active={activePath === change.path}>
-              <label class="change-select">
-                <input
-                  type="checkbox"
-                  checked={selected.has(change.path)}
-                  onchange={() => toggleSelected(change.path)}
-                  aria-label={`Include ${change.path} in the next snapshot`}
-                />
-              </label>
-              <button type="button" class="change-path" onclick={() => openDiff(change.path)}>
-                {#if change.state === "RENAMED" && change.old_path}
-                  <span class="path-text">{change.old_path} &rarr; {change.path}</span>
-                {:else}
-                  <span class="path-text">{change.path}</span>
+              <div class="change-row-main">
+                <label class="change-select">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(change.path)}
+                    onchange={() => toggleSelected(change.path)}
+                    aria-label={`Include ${change.path} in the next snapshot`}
+                  />
+                </label>
+                <button type="button" class="change-path" onclick={() => openDiff(change.path)}>
+                  {#if change.state === "RENAMED" && change.old_path}
+                    <span class="path-text">{change.old_path} &rarr; {change.path}</span>
+                  {:else}
+                    <span class="path-text">{change.path}</span>
+                  {/if}
+                </button>
+                <span class="change-tag tag-{change.state.toLowerCase()}">{CHANGE_STATE_LABEL[change.state]}</span>
+                {#if change.binary}
+                  <span class="change-flag">Binary</span>
+                {:else if change.added !== null || change.deleted !== null}
+                  <span class="change-stats">
+                    <span class="stat-add">+{change.added ?? 0}</span>
+                    <span class="stat-del">-{change.deleted ?? 0}</span>
+                  </span>
                 {/if}
-              </button>
-              <span class="change-tag tag-{change.state.toLowerCase()}">{CHANGE_STATE_LABEL[change.state]}</span>
-              {#if change.binary}
-                <span class="change-flag">Binary</span>
-              {:else if change.added !== null || change.deleted !== null}
-                <span class="change-stats">
-                  <span class="stat-add">+{change.added ?? 0}</span>
-                  <span class="stat-del">-{change.deleted ?? 0}</span>
-                </span>
-              {/if}
-              {#if change.large}
-                <span class="change-flag">Large</span>
+                {#if change.large}
+                  <span class="change-flag">Large</span>
+                {/if}
+              </div>
+              {#if change.state === "NEW"}
+                <div class="change-row-actions">
+                  <button
+                    type="button"
+                    class="row-action-button danger"
+                    disabled={rowBusyPath === change.path}
+                    aria-label={`Remove ${change.path}`}
+                    onclick={() => trashFile(change.path)}
+                  >
+                    {rowBusyPath === change.path ? "Removing…" : "Remove"}
+                  </button>
+                  <button
+                    type="button"
+                    class="row-action-button"
+                    disabled={rowBusyPath === change.path}
+                    aria-label={`Stop showing this file: ${change.path}`}
+                    onclick={() => ignoreFile(change.path)}
+                  >
+                    {rowBusyPath === change.path ? "Updating…" : "Stop showing this file"}
+                  </button>
+                </div>
+              {:else if change.state !== "CONFLICTED"}
+                <div class="change-row-actions">
+                  <button
+                    type="button"
+                    class="row-action-button danger"
+                    disabled={rowBusyPath === change.path}
+                    aria-label={`Restore last saved version: ${change.path}`}
+                    onclick={() => restoreFile(change.path)}
+                  >
+                    {rowBusyPath === change.path ? "Restoring…" : "Restore last saved version"}
+                  </button>
+                </div>
               {/if}
             </li>
           {/each}
         </ul>
       </section>
+    {/if}
+
+    {#if rowError || rowSuccess}
+      <div id="row-result" tabindex="-1">
+        {#if rowError}
+          {@render errorCard(rowError)}
+        {:else if rowSuccess}
+          <p class="row-success" role="status">{rowSuccess}</p>
+        {/if}
+      </div>
     {/if}
 
     {#if changes.length > 0 || commitError || commitSuccess}
@@ -504,27 +805,77 @@
               Also send to GitHub
             </label>
           {/if}
+
+          <label class="field-inline">
+            <input
+              type="checkbox"
+              bind:checked={markAsVersion}
+              disabled={committing || sending}
+            />
+            Mark this snapshot as a version
+          </label>
+          {#if markAsVersion}
+            <div class="tag-fields">
+              <label class="field" for="tag-name">
+                Version label <span class="required">(required)</span>
+              </label>
+              <input
+                id="tag-name"
+                type="text"
+                bind:value={tagName}
+                placeholder="e.g. v1.2.0"
+                disabled={committing}
+              />
+              <label class="field" for="tag-annotation">Note <span class="optional">(optional)</span></label>
+              <input
+                id="tag-annotation"
+                type="text"
+                bind:value={tagAnnotation}
+                placeholder="What's notable about this version?"
+                disabled={committing}
+              />
+            </div>
+          {/if}
         {/if}
 
-        {#if commitError}
-          {@render errorCard(commitError)}
-        {/if}
-        {#if commitSuccess}
-          <div class="card success" role="status">
-            <p>{commitSuccess}</p>
-            {#if sending}
-              <p>Checking GitHub for updates and sending&hellip;</p>
-            {:else if sendSuccess}
-              <p>{sendSuccess}</p>
-            {:else if sendError}
-              <p class="partial-failure">Not yet sent to GitHub: {sendError.message}</p>
-              {#if sendError.advanced}{@render advancedDetails(sendError.advanced)}{/if}
-            {/if}
-          </div>
-        {/if}
+        <div id="commit-result" tabindex="-1">
+          {#if commitError}
+            {@render errorCard(commitError)}
+          {/if}
+          {#if tagError}
+            {@render errorCard(tagError)}
+          {/if}
+          {#if commitSuccess}
+            <div class="card success" role="status">
+              <p>{commitSuccess}</p>
+              {#if taggedName}
+                <p>Marked as version {taggedName}.</p>
+              {/if}
+              {#if sending}
+                <p>Checking GitHub for updates and sending&hellip;</p>
+              {:else if sendSuccess}
+                <p>{sendSuccess}</p>
+                {#if tagPushError}
+                  <p class="partial-failure">
+                    Sent, but the version label failed to send: {tagPushError.message}
+                  </p>
+                  {#if tagPushError.advanced}{@render advancedDetails(tagPushError.advanced)}{/if}
+                {/if}
+              {:else if sendError}
+                <p class="partial-failure">Not yet sent to GitHub: {sendError.message}</p>
+                {#if sendError.advanced}{@render advancedDetails(sendError.advanced)}{/if}
+              {/if}
+            </div>
+          {/if}
+        </div>
         {#if canRetrySend}
           <button type="button" class="retry-button" disabled={sending} onclick={sendSavedSnapshots}>
             {sending ? "Sending…" : "Retry sending to GitHub"}
+          </button>
+        {/if}
+        {#if canRetryTagPush}
+          <button type="button" class="retry-button" disabled={sending} onclick={retryTagPush}>
+            {sending ? "Sending…" : "Retry sending version label"}
           </button>
         {/if}
 
@@ -542,7 +893,9 @@
         {#if diffLoading && !diff}
           <p>Loading diff&hellip;</p>
         {:else if diffError}
-          {@render errorCard(diffError)}
+          <div id="diff-result" tabindex="-1">
+            {@render errorCard(diffError)}
+          </div>
         {:else if diff}
           {#if diff.binary}
             <p class="diff-binary">This is a binary file. No text diff is available.</p>
@@ -552,6 +905,7 @@
             <pre class="diff-body"><code
               >{#each diff.lines as line}<span class="diff-line {diffLineClass(line)}"
                   ><span class="diff-sign" aria-hidden="true">{diffLineSign(line)}</span
+                  ><span class="sr-only">{diffLineSrLabel(line)}</span
                   >{diffLineText(line)}
 </span>{/each}</code
             ></pre>
@@ -568,6 +922,36 @@
 </main>
 
 <style>
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Result regions receive focus programmatically (spec Sec 9.6: "Focus
+     moves to the result or error summary after an operation") even though
+     they aren't in the normal tab order - always show where focus landed. */
+  [id$="-result"]:focus {
+    outline: 2px solid #0056b3;
+    outline-offset: 2px;
+    border-radius: 0.2rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
   main {
     max-width: 48rem;
     margin: 3rem auto;
@@ -654,6 +1038,28 @@
   .notices li {
     margin-top: 0.25rem;
   }
+  .update-section {
+    margin-top: 1rem;
+  }
+  .update-button {
+    font: inherit;
+    font-weight: 600;
+    padding: 0.45rem 1rem;
+    border: 1px solid #0056b3;
+    border-radius: 0.4rem;
+    background: #eaf1fb;
+    color: #0056b3;
+    cursor: pointer;
+  }
+  .update-button:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .update-success {
+    color: #1e7e34;
+    font-weight: 600;
+    margin-top: 0.5rem;
+  }
   dl {
     display: grid;
     grid-template-columns: 1fr auto;
@@ -682,8 +1088,8 @@
   }
   .change-row {
     display: flex;
-    align-items: center;
-    gap: 0.6rem;
+    flex-direction: column;
+    gap: 0.4rem;
     padding: 0.5rem 0.75rem;
     border-bottom: 1px solid #eee;
   }
@@ -692,6 +1098,38 @@
   }
   .change-row.active {
     background: #f3f6fb;
+  }
+  .change-row-main {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+  .change-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .row-action-button {
+    font: inherit;
+    font-size: 0.8rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 0.4rem;
+    border: 1px solid #ccc;
+    background: white;
+    cursor: pointer;
+  }
+  .row-action-button.danger {
+    border-color: #c0392b;
+    color: #922b21;
+  }
+  .row-action-button:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  .row-success {
+    color: #1e7e34;
+    font-weight: 600;
   }
   .change-select {
     display: flex;
@@ -860,6 +1298,16 @@
     gap: 0.5rem;
     margin-top: 1rem;
     font-weight: 600;
+  }
+  .tag-fields {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid #eee;
+    border-radius: 0.4rem;
+    background: #fafafa;
+  }
+  .tag-fields .field:first-child {
+    margin-top: 0;
   }
   .partial-failure {
     color: #856404;
