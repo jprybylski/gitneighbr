@@ -40,12 +40,21 @@ GitneighbrSession <- R6::R6Class(
       if (redact) base else paste0(base, "#token=", private$token_)
     },
 
-    #' @description Open the session in the default browser.
+    #' @description Open the session, preferring the RStudio/Positron Viewer
+    #'   pane (via `getOption("viewer")`, the same hook `shiny`, `profvis`,
+    #'   and `htmlwidgets` use) and falling back to the default system
+    #'   browser everywhere else.
     browse = function() {
       if (!self$is_alive()) {
         stop("gitneighbr: session is no longer running.", call. = FALSE)
       }
-      utils::browseURL(self$url(redact = FALSE))
+      url <- self$url(redact = FALSE)
+      viewer <- getOption("viewer")
+      if (is.function(viewer)) {
+        viewer(url)
+      } else {
+        utils::browseURL(url)
+      }
       invisible(self)
     },
 

@@ -91,7 +91,10 @@ Printing a session never reveals its token.
 \if{html}{\out{<a id="method-gitneighbr_session-browse"></a>}}
 \if{latex}{\out{\hypertarget{method-gitneighbr_session-browse}{}}}
 \subsection{\code{gitneighbr_session$browse()}}{
-  Open the session in the default browser.
+  Open the session, preferring the RStudio/Positron Viewer
+pane (via \code{getOption("viewer")}, the same hook \code{shiny}, \code{profvis},
+and \code{htmlwidgets} use) and falling back to the default system
+browser everywhere else.
   \subsection{Usage}{
     \if{html}{\out{<div class="r">}}
     \preformatted{gitneighbr_session$browse()}

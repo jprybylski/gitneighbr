@@ -159,6 +159,10 @@
   const actionLabel = $derived(willSend ? "Save and send" : "Save snapshot");
   const canSave = $derived(selected.size > 0 && summaryValid && tagNameValid && !committing && !sending);
   const canUpdate = $derived(status?.primary_state === "REMOTE_ONLY_CLEAN" && !updating);
+  // spec Sec 7.1/8.3: LOCAL_ONLY has no working-tree changes to select, so
+  // the commit form (and its embedded Send button) never renders - this is
+  // the only way to trigger "Send to GitHub" when there's nothing to save.
+  const canSendStandalone = $derived(canSend && changes.length === 0 && status?.ahead != null && status.ahead > 0 && !sending);
 
   // spec Sec 9.6: "Focus moves to the result or error summary after an
   // operation." Each result region below has a stable `id` and
@@ -392,7 +396,7 @@
     } finally {
       sending = false;
       await loadStatus();
-      await focusRegion("commit-result");
+      await focusRegion(changes.length > 0 || commitError || commitSuccess ? "commit-result" : "send-result");
     }
   }
 
@@ -408,11 +412,24 @@
     }
   }
 
+  // Scrolls all the way to the top of the diff pane (not just "nearest",
+  // which after a long change list can leave the pane's head off-screen)
+  // and focuses it - the outline plus the jump itself is the confirmation
+  // that a click on a file actually did something.
+  async function focusDiffPane() {
+    await tick();
+    const el = document.getElementById("diff-pane");
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.focus({ preventScroll: true });
+  }
+
   async function openDiff(path: string) {
     activePath = path;
     diff = null;
     diffError = null;
     diffLoading = true;
+    await focusDiffPane();
     try {
       const envelope = await api<DiffData>(`/api/v1/diff?path=${encodeURIComponent(path)}`);
       if (!envelope.ok || !envelope.data) {
@@ -426,6 +443,12 @@
       diffLoading = false;
       if (diffError) await focusRegion("diff-result");
     }
+  }
+
+  function closeDiff() {
+    activePath = null;
+    diff = null;
+    diffError = null;
   }
 
   // spec Sec 8.7: restoring discards the file's current unsaved contents,
@@ -680,6 +703,27 @@
           </div>
         </div>
       {/if}
+      {#if canSendStandalone || (changes.length === 0 && (sendError || sendSuccess || canRetrySend))}
+        <div class="update-section">
+          {#if canSendStandalone}
+            <button type="button" class="update-button" disabled={sending} onclick={sendSavedSnapshots}>
+              {sending ? "Sending…" : "Send to GitHub"}
+            </button>
+          {/if}
+          <div id="send-result" tabindex="-1">
+            {#if sendError}
+              {@render errorCard(sendError)}
+            {:else if sendSuccess}
+              <p class="update-success" role="status">{sendSuccess}</p>
+            {/if}
+          </div>
+          {#if canRetrySend}
+            <button type="button" class="retry-button" disabled={sending} onclick={sendSavedSnapshots}>
+              {sending ? "Sending…" : "Retry sending to GitHub"}
+            </button>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     {#if changes.length > 0}
@@ -754,6 +798,49 @@
             </li>
           {/each}
         </ul>
+      </section>
+    {/if}
+
+    {#if activePath}
+      <section
+        id="diff-pane"
+        tabindex="-1"
+        class="diff-pane"
+        aria-label={`Diff for ${activePath}`}
+        aria-live="polite"
+      >
+        <div class="diff-pane-header">
+          <h2>{activePath}</h2>
+          <button type="button" class="diff-close" aria-label="Close diff" onclick={closeDiff}>
+            Close
+          </button>
+        </div>
+        {#if diffLoading && !diff}
+          <p>Loading diff&hellip;</p>
+        {:else if diffError}
+          <div id="diff-result" tabindex="-1">
+            {@render errorCard(diffError)}
+          </div>
+        {:else if diff}
+          {#if diff.binary}
+            <p class="diff-binary">This is a binary file. No text diff is available.</p>
+          {:else if diff.lines.length === 0}
+            <p>No differences to show.</p>
+          {:else}
+            <pre class="diff-body"><code
+              >{#each diff.lines as line}<span class="diff-line {diffLineClass(line)}"
+                  ><span class="diff-sign" aria-hidden="true">{diffLineSign(line)}</span
+                  ><span class="sr-only">{diffLineSrLabel(line)}</span
+                  >{diffLineText(line)}
+</span>{/each}</code
+            ></pre>
+            {#if diff.truncated}
+              <button type="button" class="load-more" onclick={loadMoreDiff} disabled={diffLoading}>
+                {diffLoading ? "Loading…" : `Load more (${diff.offset_lines + diff.lines.length} of ${diff.total_lines} lines)`}
+              </button>
+            {/if}
+          {/if}
+        {/if}
       </section>
     {/if}
 
@@ -886,38 +973,6 @@
         {/if}
       </section>
     {/if}
-
-    {#if activePath}
-      <section class="diff-pane" aria-label={`Diff for ${activePath}`} aria-live="polite">
-        <h2>{activePath}</h2>
-        {#if diffLoading && !diff}
-          <p>Loading diff&hellip;</p>
-        {:else if diffError}
-          <div id="diff-result" tabindex="-1">
-            {@render errorCard(diffError)}
-          </div>
-        {:else if diff}
-          {#if diff.binary}
-            <p class="diff-binary">This is a binary file. No text diff is available.</p>
-          {:else if diff.lines.length === 0}
-            <p>No differences to show.</p>
-          {:else}
-            <pre class="diff-body"><code
-              >{#each diff.lines as line}<span class="diff-line {diffLineClass(line)}"
-                  ><span class="diff-sign" aria-hidden="true">{diffLineSign(line)}</span
-                  ><span class="sr-only">{diffLineSrLabel(line)}</span
-                  >{diffLineText(line)}
-</span>{/each}</code
-            ></pre>
-            {#if diff.truncated}
-              <button type="button" class="load-more" onclick={loadMoreDiff} disabled={diffLoading}>
-                {diffLoading ? "Loading…" : `Load more (${diff.offset_lines + diff.lines.length} of ${diff.total_lines} lines)`}
-              </button>
-            {/if}
-          {/if}
-        {/if}
-      </section>
-    {/if}
   {/if}
 </main>
 
@@ -937,7 +992,8 @@
   /* Result regions receive focus programmatically (spec Sec 9.6: "Focus
      moves to the result or error summary after an operation") even though
      they aren't in the normal tab order - always show where focus landed. */
-  [id$="-result"]:focus {
+  [id$="-result"]:focus,
+  #diff-pane:focus {
     outline: 2px solid #0056b3;
     outline-offset: 2px;
     border-radius: 0.2rem;
@@ -1198,11 +1254,34 @@
 
   .diff-pane {
     margin-top: 1.5rem;
+    border: 1px solid #0056b3;
+    border-radius: 0.5rem;
+    padding: 1.25rem;
+    background: #f3f6fb;
+    scroll-margin-top: 1rem;
+  }
+  .diff-pane-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
   }
   .diff-pane h2 {
+    margin: 0;
     font-family: ui-monospace, monospace;
     font-size: 1rem;
     overflow-wrap: anywhere;
+  }
+  .diff-close {
+    flex-shrink: 0;
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.3rem 0.8rem;
+    border: 1px solid #0056b3;
+    border-radius: 0.4rem;
+    background: white;
+    color: #0056b3;
+    cursor: pointer;
   }
   .diff-binary {
     color: #555;
