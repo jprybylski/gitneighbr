@@ -174,6 +174,19 @@
     document.getElementById(id)?.focus();
   }
 
+  // A rejected fetch() (as opposed to a resolved response with an error
+  // envelope) always throws TypeError - that's the browser reporting it
+  // never got a response at all, which in this app almost always means the
+  // gitneighbr server process has exited. The raw browser message for that
+  // ("Failed to fetch", "NetworkError when attempting to fetch resource.",
+  // "Load failed", ...) is meaningless to this app's non-technical users.
+  function describeFetchError(err: unknown): ApiError {
+    if (err instanceof TypeError) {
+      return { message: "Server shut down." };
+    }
+    return { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+  }
+
   async function api<T>(path: string): Promise<Envelope<T>> {
     const res = await fetch(path, {
       headers: { Authorization: `Bearer ${token}` },
@@ -241,7 +254,7 @@
         changes = changesEnvelope.data.changes;
       }
     } catch (err) {
-      errorMessage = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+      errorMessage = describeFetchError(err);
     } finally {
       statusRequestInFlight = false;
     }
@@ -342,7 +355,7 @@
         await sendSavedSnapshots();
       }
     } catch (err) {
-      commitError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+      commitError = describeFetchError(err);
     } finally {
       committing = false;
       await focusRegion("commit-result");
@@ -391,7 +404,7 @@
         await pushVersionTag(taggedName);
       }
     } catch (err) {
-      sendError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+      sendError = describeFetchError(err);
       canRetrySend = true;
     } finally {
       sending = false;
@@ -438,7 +451,7 @@
         diff = envelope.data;
       }
     } catch (err) {
-      diffError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+      diffError = describeFetchError(err);
     } finally {
       diffLoading = false;
       if (diffError) await focusRegion("diff-result");
@@ -478,7 +491,7 @@
       }
       await refresh();
     } catch (err) {
-      rowError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+      rowError = describeFetchError(err);
     } finally {
       rowBusyPath = null;
       await focusRegion("row-result");
@@ -513,7 +526,7 @@
       }
       await refresh();
     } catch (err) {
-      rowError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+      rowError = describeFetchError(err);
     } finally {
       rowBusyPath = null;
       await focusRegion("row-result");
@@ -543,7 +556,7 @@
       }
       await refresh();
     } catch (err) {
-      rowError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+      rowError = describeFetchError(err);
     } finally {
       rowBusyPath = null;
       await focusRegion("row-result");
@@ -568,7 +581,7 @@
       }
       await loadStatus();
     } catch (err) {
-      updateError = { message: err instanceof Error ? err.message : "Could not reach the gitneighbr server." };
+      updateError = describeFetchError(err);
     } finally {
       updating = false;
       await focusRegion("update-result");

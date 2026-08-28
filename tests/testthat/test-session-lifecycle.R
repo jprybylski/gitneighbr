@@ -46,6 +46,25 @@ test_that("open_repo launches non-blocking, serves real status, and stops cleanl
   expect_false(session$is_alive())
 })
 
+test_that("stop_session accepts a bare port number as its first argument", {
+  skip_on_cran()
+  skip_if_not_installed("httr2")
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  dir <- withr::local_tempdir()
+  processx::run(git, c("-C", dir, "init", "-q", "-b", "main"), error_on_status = TRUE)
+
+  session <- open_repo(path = dir, browse = FALSE)
+  port <- as.integer(sub(".*:(\\d+)/$", "\\1", session$url(redact = TRUE)))
+
+  # stop_session(52200) - a positional numeric first argument is a port, not
+  # a `gitneighbr_session` object, even though `session` is the first formal.
+  stop_session(port)
+  Sys.sleep(0.5)
+  expect_false(session$is_alive())
+})
+
 test_that("a spoofed Host header is rejected on both GET and POST endpoints (DNS-rebinding defense)", {
   skip_on_cran()
   skip_if_not_installed("httr2")

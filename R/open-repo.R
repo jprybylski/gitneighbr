@@ -80,12 +80,19 @@ open_repo <- function(path = ".",
 
 #' Stop a gitneighbr session
 #'
-#' @param session A `gitneighbr_session` object, or `NULL`.
+#' @param session A `gitneighbr_session` object, or `NULL`. A bare port
+#'   number (e.g. `stop_session(52200)`) is also accepted here and treated
+#'   as `port`, since that is an easy mixup for a learning tool.
 #' @param port If `session` is `NULL`, the port of a session to look up and
 #'   stop by force (e.g. after the R session that started it was restarted).
 #' @param host Host to look on when stopping by port.
 #' @export
 stop_session <- function(session = NULL, port = NULL, host = "127.0.0.1") {
+  if (!is.null(session) && !inherits(session, "gitneighbr_session") &&
+      is.null(port) && is.numeric(session) && length(session) == 1) {
+    port <- session
+    session <- NULL
+  }
   if (!is.null(session)) {
     return(session$stop())
   }

@@ -7,7 +7,9 @@
 stop_session(session = NULL, port = NULL, host = "127.0.0.1")
 }
 \arguments{
-\item{session}{A \code{gitneighbr_session} object, or \code{NULL}.}
+\item{session}{A \code{gitneighbr_session} object, or \code{NULL}. A bare port
+number (e.g. \code{stop_session(52200)}) is also accepted here and treated
+as \code{port}, since that is an easy mixup for a learning tool.}
 
 \item{port}{If \code{session} is \code{NULL}, the port of a session to look up and
 stop by force (e.g. after the R session that started it was restarted).}
