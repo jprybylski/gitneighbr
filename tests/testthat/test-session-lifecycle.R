@@ -46,6 +46,139 @@ test_that("open_repo launches non-blocking, serves real status, and stops cleanl
   expect_false(session$is_alive())
 })
 
+test_that("a spoofed Host header is rejected on both GET and POST endpoints (DNS-rebinding defense)", {
+  skip_on_cran()
+  skip_if_not_installed("httr2")
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  dir <- withr::local_tempdir()
+  processx::run(git, c("-C", dir, "init", "-q", "-b", "main"), error_on_status = TRUE)
+
+  session <- open_repo(path = dir, browse = FALSE)
+  withr::defer(session$stop())
+  full_url <- session$url(redact = FALSE)
+  token <- sub(".*token=", "", full_url)
+  base_url <- sub("#.*", "", full_url)
+
+  spoofed_get <- httr2::request(paste0(base_url, "api/v1/status")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_headers(Host = "evil.example.com") |>
+    httr2::req_error(is_error = function(resp) FALSE) |>
+    httr2::req_perform()
+  expect_equal(httr2::resp_status(spoofed_get), 400L)
+
+  spoofed_post <- httr2::request(paste0(base_url, "api/v1/commit")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_headers(Host = "evil.example.com") |>
+    httr2::req_body_json(list(paths = list(), summary = "x", status_version = 1)) |>
+    httr2::req_error(is_error = function(resp) FALSE) |>
+    httr2::req_perform()
+  expect_equal(httr2::resp_status(spoofed_post), 400L)
+
+  # A correctly-addressed request against the same session still works.
+  ok <- httr2::request(paste0(base_url, "api/v1/health")) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_true(ok$ok)
+})
+
+test_that("a mismatched Origin is rejected on a mutating request; a matching or absent Origin is accepted, and no CORS header is ever set", {
+  skip_on_cran()
+  skip_if_not_installed("httr2")
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  dir <- withr::local_tempdir()
+  processx::run(git, c("-C", dir, "init", "-q", "-b", "main"), error_on_status = TRUE)
+
+  session <- open_repo(path = dir, browse = FALSE)
+  withr::defer(session$stop())
+  full_url <- session$url(redact = FALSE)
+  token <- sub(".*token=", "", full_url)
+  base_url <- sub("#.*", "", full_url)
+  same_origin <- sub("/$", "", base_url)
+
+  wrong_origin <- httr2::request(paste0(base_url, "api/v1/commit")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_headers(Origin = "http://evil.example.com") |>
+    httr2::req_body_json(list(paths = list(), summary = "x", status_version = 1)) |>
+    httr2::req_error(is_error = function(resp) FALSE) |>
+    httr2::req_perform()
+  expect_equal(httr2::resp_status(wrong_origin), 403L)
+
+  # A deliberately stale status_version, so a *matching* Origin is proven to
+  # have passed the check by reaching the next gate (409 STATE_CHANGED)
+  # rather than being rejected for the Origin itself.
+  matching_origin <- httr2::request(paste0(base_url, "api/v1/commit")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_headers(Origin = same_origin) |>
+    httr2::req_body_json(list(paths = list(), summary = "x", status_version = -1)) |>
+    httr2::req_error(is_error = function(resp) FALSE) |>
+    httr2::req_perform()
+  expect_equal(httr2::resp_status(matching_origin), 409L)
+
+  absent_origin <- httr2::request(paste0(base_url, "api/v1/commit")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(paths = list(), summary = "x", status_version = -1)) |>
+    httr2::req_error(is_error = function(resp) FALSE) |>
+    httr2::req_perform()
+  expect_equal(httr2::resp_status(absent_origin), 409L)
+
+  expect_null(httr2::resp_header(matching_origin, "Access-Control-Allow-Origin"))
+  expect_null(httr2::resp_header(absent_origin, "Access-Control-Allow-Origin"))
+})
+
+test_that("a mutating request carries a fresh X-Operation-Id response header, including on a failed mutation", {
+  skip_on_cran()
+  skip_if_not_installed("httr2")
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  dir <- withr::local_tempdir()
+  processx::run(git, c("-C", dir, "init", "-q", "-b", "main"), error_on_status = TRUE)
+
+  session <- open_repo(path = dir, browse = FALSE)
+  withr::defer(session$stop())
+  full_url <- session$url(redact = FALSE)
+  token <- sub(".*token=", "", full_url)
+  base_url <- sub("#.*", "", full_url)
+
+  fetch_version <- function() {
+    httr2::request(paste0(base_url, "api/v1/status")) |>
+      httr2::req_auth_bearer_token(token) |>
+      httr2::req_perform() |>
+      httr2::resp_body_json() |>
+      (\(resp) resp$status_version)()
+  }
+
+  # EMPTY_SELECTION: a failed mutation past the freshness gate, so the lock
+  # (and its operation ID) was still acquired for it.
+  failed <- httr2::request(paste0(base_url, "api/v1/commit")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(paths = list(), summary = "A fine summary", status_version = fetch_version())) |>
+    httr2::req_error(is_error = function(resp) FALSE) |>
+    httr2::req_perform()
+  expect_equal(httr2::resp_body_json(failed)$error$code, "EMPTY_SELECTION")
+  first_id <- httr2::resp_header(failed, "X-Operation-Id")
+  expect_true(is.character(first_id) && nzchar(first_id))
+
+  writeLines("hi", file.path(dir, "a.txt"))
+  saved <- httr2::request(paste0(base_url, "api/v1/commit")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(paths = list("a.txt"), summary = "Add a.txt", status_version = fetch_version())) |>
+    httr2::req_perform()
+  second_id <- httr2::resp_header(saved, "X-Operation-Id")
+  expect_true(is.character(second_id) && nzchar(second_id))
+  expect_false(identical(first_id, second_id)) # the lock was released between the two
+
+  # A plain read never gets one -- only mutating endpoints acquire the lock.
+  status <- httr2::request(paste0(base_url, "api/v1/status")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_perform()
+  expect_null(httr2::resp_header(status, "X-Operation-Id"))
+})
+
 test_that("POST /api/v1/commit saves exactly the selected files over HTTP", {
   skip_on_cran()
   skip_if_not_installed("httr2")

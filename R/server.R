@@ -24,14 +24,48 @@
   stop("gitneighbr: could not find a free port after ", tries, " attempts.", call. = FALSE)
 }
 
+#' Acquire the single-mutation lock for one session (spec Sec 12.5)
+#'
+#' At most one repository-mutating operation runs at a time per session.
+#' Returns the fresh operation ID -- also set as the `X-Operation-Id`
+#' response header, so it's available both in logs and in the response, as
+#' spec Sec 12.5 requires -- when the lock was free, or `NULL` when a
+#' competing mutation is already in progress; the caller must then answer
+#' `423 OPERATION_IN_PROGRESS` without running anything. Always pair a
+#' non-`NULL` acquisition with `on.exit(.release_mutation_lock(session_state),
+#' add = TRUE)` so the lock is freed even if the operation errors.
+#'
+#' @param session_state The per-session mutable environment `.build_api()`
+#'   holds (`version`, `mutation_lock`, etc.).
+#' @param response The plumber2/reqres response object for this request.
+#' @noRd
+.acquire_mutation_lock <- function(session_state, response) {
+  if (isTRUE(session_state$mutation_lock)) {
+    return(NULL)
+  }
+  session_state$mutation_lock <- TRUE
+  operation_id <- .new_operation_id()
+  response$set_header("X-Operation-Id", operation_id)
+  operation_id
+}
+
+#' Release the single-mutation lock acquired by `.acquire_mutation_lock()`
+#' @noRd
+.release_mutation_lock <- function(session_state) {
+  session_state$mutation_lock <- FALSE
+}
+
 #' Build the plumber2 app for a single repository session
 #'
 #' @param repo_root Canonical path to the Git working tree root.
 #' @param git_bin Path to the `git` executable.
 #' @param token Bearer token required on every `/api/v1/*` request.
+#' @param port The port this session is bound to, for `Host`/`Origin`
+#'   validation (spec Sec 12.1/12.2) -- the actual bind happens later, in
+#'   `plumber2::api_run()`, so this must match what's passed there.
 #' @param www_dir Directory containing the precompiled frontend.
 #' @noRd
-.build_api <- function(repo_root, git_bin, token, www_dir = system.file("www", package = "gitneighbr")) {
+.build_api <- function(repo_root, git_bin, token, port, www_dir = system.file("www", package = "gitneighbr")) {
   # plumber2's default JSON serializer does not auto-unbox length-1
   # vectors (so `list(ok = TRUE)` would serialize as `{"ok":[true]}`),
   # which is surprising for API clients. `register_serializer()` expects
@@ -62,6 +96,17 @@
   session_state$auth_required <- FALSE
   session_state$pending_tags <- character()
   session_state$pushed_tags <- character()
+  session_state$mutation_lock <- FALSE
+
+  # DNS-rebinding mitigation (spec Sec 12.1): a request whose `Host` header
+  # doesn't name this exact loopback authority is rejected outright, before
+  # authentication -- an attacker's rebound hostname can carry a stolen
+  # token but can never legitimately claim to *be* "127.0.0.1:<port>".
+  validate_host <- function(request) {
+    if (!.valid_host_header(request$get_header("Host"), port)) {
+      plumber2::abort_bad_request("Invalid Host header.")
+    }
+  }
 
   require_auth <- function(request) {
     supplied <- request$get_header("Authorization")
@@ -70,6 +115,18 @@
       plumber2::abort_unauthorized("Missing or invalid session token.")
     }
   }
+
+  # spec Sec 12.2: only checked on mutating requests, and only when a
+  # browser actually sent one -- a non-browser API caller (curl, an R
+  # script) has no `Origin` to send and is not rejected for its absence.
+  validate_origin <- function(request) {
+    if (!.valid_origin_header(request$get_header("Origin"), port)) {
+      plumber2::abort_forbidden("Invalid Origin header.")
+    }
+  }
+
+  acquire_mutation_lock <- function(response) .acquire_mutation_lock(session_state, response)
+  release_mutation_lock <- function() .release_mutation_lock(session_state)
 
   # `request$parse()` requires an explicit named parser list on every call
   # (it has no implicit default), so a malformed/absent JSON body is caught
@@ -128,10 +185,12 @@
     # not-static at all, handing it to the router (and its own methods)
     # unmodified.
     plumber2::api_statics(at = "/", path = www_dir, fallthrough = TRUE, except = "api") |>
-    plumber2::api_get("/api/v1/health", function() {
+    plumber2::api_get("/api/v1/health", function(request) {
+      validate_host(request)
       list(ok = TRUE, data = list(status = "ok"), error = NULL)
     }) |>
     plumber2::api_get("/api/v1/status", function(request) {
+      validate_host(request)
       require_auth(request)
 
       show_ignored <- identical(request$query$show_ignored, "true")
@@ -139,6 +198,7 @@
       .ok_envelope(payload$data, status_version = payload$version)
     }) |>
     plumber2::api_get("/api/v1/changes", function(request) {
+      validate_host(request)
       require_auth(request)
 
       if (!.git_available(git_bin)) {
@@ -147,6 +207,7 @@
       .ok_envelope(list(changes = .git_changes(repo_root, git_bin)))
     }) |>
     plumber2::api_get("/api/v1/diff", function(request) {
+      validate_host(request)
       require_auth(request)
 
       if (!.git_available(git_bin)) {
@@ -174,7 +235,9 @@
       .ok_envelope(result[names(result) != "found"])
     }) |>
     plumber2::api_post("/api/v1/commit", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -187,6 +250,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_commit_selected(
         repo_root, git_bin,
@@ -205,7 +278,9 @@
       .ok_envelope(list(sha = result$sha, summary = result$summary), status_version = payload$version)
     }) |>
     plumber2::api_post("/api/v1/refresh-remote", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -218,6 +293,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_refresh_remote(repo_root, git_bin)
       note_auth_result(result)
@@ -241,7 +326,9 @@
       ), status_version = payload$version)
     }) |>
     plumber2::api_post("/api/v1/push", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -254,6 +341,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_push_current_branch(repo_root, git_bin)
       note_auth_result(result)
@@ -274,7 +371,9 @@
       ), status_version = payload$version)
     }) |>
     plumber2::api_post("/api/v1/update", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -287,6 +386,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_update_current_branch(repo_root, git_bin)
       note_auth_result(result)
@@ -307,7 +416,9 @@
       ), status_version = payload$version)
     }) |>
     plumber2::api_post("/api/v1/tag", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -320,6 +431,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_create_tag(repo_root, git_bin, name = body$name, annotation = body$annotation)
       if (isTRUE(result$ok)) {
@@ -336,7 +457,9 @@
       .ok_envelope(list(name = result$name, sha = result$sha), status_version = payload$version)
     }) |>
     plumber2::api_post("/api/v1/push-tag", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -349,6 +472,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_push_tag(repo_root, git_bin, name = body$name)
       note_auth_result(result)
@@ -367,7 +500,9 @@
       .ok_envelope(list(remote = result$remote, name = result$name), status_version = payload$version)
     }) |>
     plumber2::api_post("/api/v1/restore", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -380,6 +515,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_restore_tracked_file(repo_root, git_bin, path = body$path)
       payload <- .status_payload(repo_root, git_bin, session_state)
@@ -393,7 +538,9 @@
       .ok_envelope(list(path = result$path), status_version = payload$version)
     }) |>
     plumber2::api_post("/api/v1/trash", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -406,6 +553,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_trash_untracked_file(repo_root, git_bin, path = body$path)
       payload <- .status_payload(repo_root, git_bin, session_state)
@@ -419,7 +576,9 @@
       .ok_envelope(list(path = result$path), status_version = payload$version)
     }) |>
     plumber2::api_post("/api/v1/ignore", function(request, response) {
+      validate_host(request)
       require_auth(request)
+      validate_origin(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
@@ -432,6 +591,16 @@
       if (!is.null(stale)) {
         return(stale)
       }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
 
       result <- .git_ignore_path(repo_root, git_bin, path = body$path)
       payload <- .status_payload(repo_root, git_bin, session_state)
@@ -462,6 +631,6 @@
   git_bin <- Sys.getenv("GITNEIGHBR_GIT")
   www_dir <- Sys.getenv("GITNEIGHBR_WWW_DIR", system.file("www", package = "gitneighbr"))
 
-  api <- .build_api(repo_root, git_bin, token, www_dir)
+  api <- .build_api(repo_root, git_bin, token, port, www_dir)
   plumber2::api_run(api, host = host, port = port, block = TRUE, showcase = FALSE)
 }

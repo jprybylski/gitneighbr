@@ -38,6 +38,56 @@
   identical(charToRaw(supplied), charToRaw(expected))
 }
 
+#' The `Host`/`Origin` values a loopback-bound server on `port` may legitimately see
+#'
+#' Both spellings of loopback (`127.0.0.1` and `localhost`) are always
+#' accepted regardless of which one the session was actually opened with:
+#' either is safe (both stay on-machine), and the browser tab itself picks
+#' whichever spelling the initial URL used. A DNS-rebinding attacker's
+#' hostname can never equal either literal string, no matter what it
+#' resolves to.
+#' @noRd
+.loopback_authorities <- function(port) {
+  c(paste0("127.0.0.1:", port), paste0("localhost:", port))
+}
+
+#' Validate a request's `Host` header against the bound loopback port (spec
+#' Sec 12.1's DNS-rebinding mitigation)
+#'
+#' A missing header (not possible for a conformant HTTP/1.1 client, but
+#' cheap to check) is rejected along with everything else that isn't an
+#' exact `host:port` match.
+#' @noRd
+.valid_host_header <- function(host_header, port) {
+  !is.null(host_header) && host_header %in% .loopback_authorities(port)
+}
+
+#' Validate a request's `Origin` header against the bound loopback port
+#' (spec Sec 12.2)
+#'
+#' `Origin` is absent for same-origin navigations in some older clients and
+#' for non-browser API callers (curl, an R script) entirely -- neither of
+#' which this rejects, since the bearer token is the actual authentication
+#' boundary here. When the header *is* present, it must name this exact
+#' server over plain HTTP (the local server never serves HTTPS).
+#' @noRd
+.valid_origin_header <- function(origin_header, port) {
+  if (is.null(origin_header) || !nzchar(origin_header)) {
+    return(TRUE)
+  }
+  origin_header %in% paste0("http://", .loopback_authorities(port))
+}
+
+#' Generate a short opaque ID for one mutating operation (spec Sec 12.5)
+#'
+#' Used only for correlating a single mutation across logs and its own
+#' response (`X-Operation-Id` header) -- not a secret, so a short ID (8
+#' random bytes, hex-encoded) is plenty.
+#' @noRd
+.new_operation_id <- function() {
+  paste0(as.character(openssl::rand_bytes(8)), collapse = "")
+}
+
 #' Redact secrets and unnecessary home-directory disclosure from raw Git output
 #'
 #' Implements spec Sec 15's sanitization requirement for anything from raw
