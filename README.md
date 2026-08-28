@@ -1,5 +1,9 @@
 # gitneighbr
 
+<!-- badges: start -->
+[![R-CMD-check](https://github.com/jprybylski/gitneighbr/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/jprybylski/gitneighbr/actions/workflows/R-CMD-check.yaml)
+<!-- badges: end -->
+
 > Be a good neighbor to your repository.
 
 `gitneighbr` is a local, browser-based tool that helps people who are

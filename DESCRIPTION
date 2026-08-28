@@ -19,7 +19,7 @@ Depends:
 Imports:
     fs,
     openssl,
-    plumber2,
+    plumber2 (>= 0.2.0),
     processx,
     R6,
     reqres,
