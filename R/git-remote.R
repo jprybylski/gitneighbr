@@ -327,3 +327,118 @@
     updated_count = fresh_status$behind
   )
 }
+
+#' Connect a repository's `origin` remote and push its current branch
+#'
+#' Implements the "publish" half of spec Sec 22 (0.2.0): connects a
+#' repository that has no upstream configured yet to a GitHub repository
+#' the user created and pasted the URL for, then pushes with `-u` so the
+#' branch tracks it from then on. Also serves an existing repository that
+#' simply never had a remote configured (`NO_UPSTREAM` reached without ever
+#' going through onboarding) -- the two cases only differ in whether
+#' `origin` already exists.
+#'
+#' Unlike `.git_push_current_branch()`, no fetch-first safety check applies:
+#' there is no upstream yet to have diverged from.
+#'
+#' @param repo_root Canonical repository root.
+#' @param git_bin Path to the `git` executable.
+#' @param url The GitHub repository URL to connect to.
+#' @param force Overwrite an existing `origin` that points somewhere else,
+#'   rather than refusing with `REMOTE_ALREADY_SET`.
+#' @return A list. On success: `ok = TRUE`, `remote`, `remote_branch`,
+#'   `branch`, `sha`, `pushed_count`. On failure: `ok = FALSE`, `code`,
+#'   `message`, `recoverable`, and possibly `data`/`advanced`/`diagnosis`.
+#' @noRd
+.git_publish_repo <- function(repo_root, git_bin, url, force = FALSE) {
+  status <- .git_status(repo_root, git_bin)
+
+  if (status$detached) {
+    return(list(
+      ok = FALSE, code = "DETACHED_HEAD",
+      message = "Check out a branch before publishing to GitHub.", recoverable = FALSE
+    ))
+  }
+  if (isTRUE(status$unborn)) {
+    return(list(
+      ok = FALSE, code = "NOTHING_TO_PUBLISH",
+      message = "Save a snapshot first, then publish it to GitHub.", recoverable = TRUE
+    ))
+  }
+  if (!is.null(status$upstream)) {
+    return(list(
+      ok = FALSE, code = "ALREADY_PUBLISHED",
+      message = "This branch is already connected to GitHub.", recoverable = FALSE
+    ))
+  }
+  if (!nzchar(trimws(url %||% ""))) {
+    return(list(
+      ok = FALSE, code = "INVALID_REMOTE_URL",
+      message = "Enter the address of the GitHub repository to publish to.", recoverable = TRUE
+    ))
+  }
+
+  existing_url <- .git_remote_url(repo_root, git_bin, "origin")
+  if (!is.null(existing_url) && !identical(existing_url, url) && !isTRUE(force)) {
+    return(list(
+      ok = FALSE, code = "REMOTE_ALREADY_SET",
+      message = paste0("This project's 'origin' already points to '", existing_url, "'."),
+      recoverable = TRUE, data = list(existing_url = existing_url)
+    ))
+  }
+
+  remote_args <- if (is.null(existing_url)) {
+    c("-C", repo_root, "remote", "add", "origin", url)
+  } else {
+    c("-C", repo_root, "remote", "set-url", "origin", url)
+  }
+  remote_result <- processx::run(git_bin, remote_args, error_on_status = FALSE, timeout = 15)
+  if (!identical(remote_result$status, 0L)) {
+    return(list(
+      ok = FALSE, code = "COMMAND_FAILED",
+      message = "Could not connect to that GitHub repository.", recoverable = TRUE,
+      advanced = .advanced_block(remote_args, remote_result)
+    ))
+  }
+
+  push_args <- c("-C", repo_root, "push", "-u", "origin", status$branch)
+  push_result <- processx::run(git_bin, push_args, error_on_status = FALSE, timeout = 60)
+  if (!identical(push_result$status, 0L)) {
+    code <- .classify_push_failure(push_result$stderr)
+    message <- if (identical(code, "REMOTE_AHEAD")) {
+      paste(
+        "GitHub already has commits in this repository (for example, a README it created",
+        "automatically). Delete those first, or use \"Clone an existing GitHub repository\" instead."
+      )
+    } else {
+      "GitHub rejected this push."
+    }
+    return(list(
+      ok = FALSE, code = code, message = message, recoverable = TRUE,
+      advanced = .advanced_block(push_args, push_result),
+      diagnosis = .diagnosis_for_failure(repo_root, git_bin, code, push_result$stderr)
+    ))
+  }
+
+  sha <- trimws(processx::run(
+    git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"),
+    error_on_status = TRUE, timeout = 15
+  )$stdout)
+  # `status$ahead` is always 0 here: it reflects the branch.ab Git reports
+  # against an upstream, and there was none until the push above just set
+  # it. Every commit on the branch is new to the remote, since publishing
+  # is only reachable with no upstream configured yet.
+  commit_count <- as.integer(trimws(processx::run(
+    git_bin, c("-C", repo_root, "rev-list", "--count", "HEAD"),
+    error_on_status = TRUE, timeout = 15
+  )$stdout))
+
+  list(
+    ok = TRUE,
+    remote = "origin",
+    remote_branch = status$branch,
+    branch = status$branch,
+    sha = sha,
+    pushed_count = commit_count
+  )
+}

@@ -39,7 +39,14 @@
   PATH_OUTSIDE_REPOSITORY = "Path is outside this repository",
   PATH_IS_DIRECTORY = "That's a folder, not a file",
   TRASH_UNAVAILABLE = "Couldn't move file to trash",
-  COMMAND_FAILED = "Git command failed"
+  COMMAND_FAILED = "Git command failed",
+  ALREADY_A_REPOSITORY = "Already a Git project",
+  INVALID_REMOTE_URL = "Repository address needed",
+  CLONE_DESTINATION_NOT_EMPTY = "Folder already has files",
+  REMOTE_NOT_FOUND = "Repository not found",
+  NOTHING_TO_PUBLISH = "Nothing to publish yet",
+  ALREADY_PUBLISHED = "Already connected to GitHub",
+  REMOTE_ALREADY_SET = "Already connected elsewhere"
 )
 
 #' Look up the stable title for an application error code

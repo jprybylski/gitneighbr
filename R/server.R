@@ -128,6 +128,20 @@
   acquire_mutation_lock <- function(response) .acquire_mutation_lock(session_state, response)
   release_mutation_lock <- function() .release_mutation_lock(session_state)
 
+  # `repo_root` may not be a Git repository yet (onboarding: init/clone
+  # haven't run). Every endpoint except health, status, init, and clone
+  # needs a real repository to operate on; this returns an error envelope
+  # for those, or `NULL` when the request may proceed.
+  require_existing_repo <- function() {
+    if (!identical(.git_repo_kind(repo_root, git_bin), "worktree")) {
+      return(.error_envelope(
+        "NOT_REPOSITORY", "This folder isn't a Git project yet.",
+        recoverable = TRUE
+      ))
+    }
+    NULL
+  }
+
   # `request$parse()` requires an explicit named parser list on every call
   # (it has no implicit default), so a malformed/absent JSON body is caught
   # here and turned into `NULL` for callers to map onto the same envelope
@@ -204,6 +218,10 @@
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
       .ok_envelope(list(changes = .git_changes(repo_root, git_bin)))
     }) |>
     plumber2::api_get("/api/v1/diff", function(request) {
@@ -212,6 +230,10 @@
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
       }
 
       path <- request$query$path %||% ""
@@ -241,6 +263,10 @@
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
       .ok_envelope(.git_identity(repo_root, git_bin))
     }) |>
     plumber2::api_get("/api/v1/credential-diagnosis", function(request) {
@@ -249,6 +275,10 @@
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
       }
       .ok_envelope(.git_credential_diagnosis(repo_root, git_bin))
     }) |>
@@ -259,6 +289,10 @@
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
       }
       body <- parse_body(request)
       if (is.null(body)) {
@@ -297,6 +331,10 @@
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
       }
       body <- parse_body(request)
       if (is.null(body)) {
@@ -340,6 +378,10 @@
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
       }
       body <- parse_body(request)
       if (is.null(body)) {
@@ -389,6 +431,10 @@
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
       body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
@@ -433,6 +479,10 @@
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
       }
       body <- parse_body(request)
       if (is.null(body)) {
@@ -479,6 +529,10 @@
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
       body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
@@ -519,6 +573,10 @@
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
       }
       body <- parse_body(request)
       if (is.null(body)) {
@@ -563,6 +621,10 @@
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
       body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
@@ -600,6 +662,10 @@
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
       }
       body <- parse_body(request)
       if (is.null(body)) {
@@ -639,6 +705,10 @@
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
       body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
@@ -668,6 +738,131 @@
         ))
       }
       .ok_envelope(list(path = result$path, rule = result$rule, added = result$added), status_version = payload$version)
+    }) |>
+    plumber2::api_post("/api/v1/init", function(request, response) {
+      validate_host(request)
+      require_auth(request)
+      validate_origin(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      body <- parse_body(request)
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
+
+      result <- .git_init_workspace(repo_root, git_bin)
+      payload <- .status_payload(repo_root, git_bin, session_state)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
+        ))
+      }
+      .ok_envelope(list(), status_version = payload$version)
+    }) |>
+    plumber2::api_post("/api/v1/clone", function(request, response) {
+      validate_host(request)
+      require_auth(request)
+      validate_origin(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      body <- parse_body(request)
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
+
+      result <- .git_clone_repo(repo_root, git_bin, url = body$url)
+      payload <- .status_payload(repo_root, git_bin, session_state)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced
+        ))
+      }
+      .ok_envelope(list(), status_version = payload$version)
+    }) |>
+    plumber2::api_post("/api/v1/publish", function(request, response) {
+      validate_host(request)
+      require_auth(request)
+      validate_origin(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
+      body <- parse_body(request)
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
+
+      result <- .git_publish_repo(repo_root, git_bin, url = body$url, force = isTRUE(body$force))
+      note_auth_result(result)
+      payload <- .status_payload(repo_root, git_bin, session_state)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          data = result$data, advanced = result$advanced, diagnosis = result$diagnosis
+        ))
+      }
+      .ok_envelope(list(
+        remote = result$remote,
+        remote_branch = result$remote_branch,
+        branch = result$branch,
+        sha = result$sha,
+        pushed_count = result$pushed_count
+      ), status_version = payload$version)
     })
 }
 

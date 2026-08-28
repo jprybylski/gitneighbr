@@ -225,3 +225,72 @@ test_that(".git_update_current_branch fails with NO_UPSTREAM when the branch has
   expect_false(result$ok)
   expect_equal(result$code, "NO_UPSTREAM")
 })
+
+local_repo_without_remote <- function(env = parent.frame()) {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  dir <- withr::local_tempdir(.local_envir = env)
+  run <- function(...) processx::run(git, c("-C", dir, ...), error_on_status = TRUE)
+  run("init", "-q", "-b", "main")
+  run("config", "user.email", "test@example.com")
+  run("config", "user.name", "Test")
+  writeLines("hello", file.path(dir, "hello.txt"))
+  run("add", "hello.txt")
+  run("commit", "-q", "-m", "initial commit")
+
+  list(dir = dir, git = git, run = run)
+}
+
+test_that(".git_publish_repo connects a fresh remote and pushes with -u", {
+  repo <- local_repo_without_remote()
+  remote_dir <- withr::local_tempdir()
+  processx::run(repo$git, c("init", "-q", "--bare", "-b", "main", remote_dir), error_on_status = TRUE)
+
+  result <- .git_publish_repo(repo$dir, repo$git, url = remote_dir)
+  expect_true(result$ok)
+  expect_equal(result$remote, "origin")
+  expect_equal(result$remote_branch, "main")
+  expect_equal(result$pushed_count, 1L)
+
+  remote_log <- processx::run(repo$git, c("-C", remote_dir, "log", "-1", "--format=%s", "main"), error_on_status = TRUE)
+  expect_equal(trimws(remote_log$stdout), "initial commit")
+  expect_equal(.git_upstream_info(repo$dir, repo$git, "main")$remote, "origin")
+})
+
+test_that(".git_publish_repo fails with NOTHING_TO_PUBLISH when there are no commits yet", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  dir <- withr::local_tempdir()
+  processx::run(git, c("-C", dir, "init", "-q", "-b", "main"), error_on_status = TRUE)
+
+  result <- .git_publish_repo(dir, git, url = "https://github.com/example/example.git")
+  expect_false(result$ok)
+  expect_equal(result$code, "NOTHING_TO_PUBLISH")
+})
+
+test_that(".git_publish_repo fails with ALREADY_PUBLISHED when an upstream is already configured", {
+  repo <- local_repo_with_remote()
+  result <- .git_publish_repo(repo$dir, repo$git, url = "https://github.com/example/example.git")
+  expect_false(result$ok)
+  expect_equal(result$code, "ALREADY_PUBLISHED")
+})
+
+test_that(".git_publish_repo refuses to overwrite an existing origin without force, then succeeds with force", {
+  repo <- local_repo_without_remote()
+  first_remote <- withr::local_tempdir()
+  processx::run(repo$git, c("init", "-q", "--bare", "-b", "main", first_remote), error_on_status = TRUE)
+  repo$run("remote", "add", "origin", first_remote)
+
+  second_remote <- withr::local_tempdir()
+  processx::run(repo$git, c("init", "-q", "--bare", "-b", "main", second_remote), error_on_status = TRUE)
+
+  refused <- .git_publish_repo(repo$dir, repo$git, url = second_remote)
+  expect_false(refused$ok)
+  expect_equal(refused$code, "REMOTE_ALREADY_SET")
+  expect_equal(refused$data$existing_url, first_remote)
+
+  forced <- .git_publish_repo(repo$dir, repo$git, url = second_remote, force = TRUE)
+  expect_true(forced$ok)
+  expect_equal(.git_remote_url(repo$dir, repo$git, "origin"), second_remote)
+})

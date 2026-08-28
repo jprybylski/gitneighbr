@@ -219,7 +219,15 @@
 #' @noRd
 .status_payload <- function(repo_root, git_bin, session_state, show_ignored = FALSE) {
   git_ok <- .git_available(git_bin)
-  status <- if (git_ok) .git_status(repo_root, git_bin) else NULL
+  # `repo_root` may not be a Git repository yet (onboarding: init/clone
+  # haven't run). `.git_status()` uses `error_on_status = TRUE` and would
+  # throw for a non-repo path, so repo-ness is checked first; `NULL` here
+  # is exactly what `.primary_state()` reads as `NOT_REPOSITORY`.
+  status <- if (git_ok && identical(.git_repo_kind(repo_root, git_bin), "worktree")) {
+    .git_status(repo_root, git_bin)
+  } else {
+    NULL
+  }
   notices <- if (git_ok && !is.null(status)) {
     .status_notices(repo_root, git_bin, status, session_state, show_ignored = show_ignored)
   } else {

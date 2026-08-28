@@ -169,6 +169,23 @@
   let updateError = $state<ApiError | null>(null);
   let updateSuccess = $state<string | null>(null);
 
+  // Onboarding (issues #19/#20): a fresh session for a folder that isn't a
+  // Git repository yet offers two ways in, and either one hands off to the
+  // normal dashboard once `loadStatus()` sees the resulting state change.
+  let initializing = $state(false);
+  let initError = $state<ApiError | null>(null);
+  let cloneUrl = $state("");
+  let cloning = $state(false);
+  let cloneError = $state<ApiError | null>(null);
+
+  // "Connect to GitHub" (also issue #20): the same action serves a
+  // from-scratch repository right after Initialize, and an existing
+  // repository that simply never had a remote configured.
+  let publishUrl = $state("");
+  let publishing = $state(false);
+  let publishError = $state<ApiError | null>(null);
+  let publishSuccess = $state<string | null>(null);
+
   let identityLoaded = false;
   let identityName = $state("");
   let identityEmail = $state("");
@@ -204,6 +221,8 @@
   const identityValid = $derived(
     identityName.trim().length > 0 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identityEmail.trim()),
   );
+  const cloneUrlValid = $derived(cloneUrl.trim().length > 0);
+  const publishUrlValid = $derived(publishUrl.trim().length > 0);
 
   // spec Sec 9.6: "Focus moves to the result or error summary after an
   // operation." Each result region below has a stable `id` and
@@ -704,6 +723,90 @@
     }
   }
 
+  // Onboarding, path 1 of 2 (issue #20): initializes the folder gitneighbr
+  // is already pointed at. `loadStatus()` afterward is what actually moves
+  // the UI off the onboarding screen, by picking up the new primary_state.
+  async function initializeHere() {
+    initError = null;
+    initializing = true;
+    try {
+      const envelope = await postApi<Record<string, never>>("/api/v1/init", {});
+      if (!envelope.ok) {
+        initError = envelope.error ?? { message: "Could not initialize a Git repository here." };
+        return;
+      }
+      await loadStatus();
+    } catch (err) {
+      initError = describeFetchError(err);
+    } finally {
+      initializing = false;
+      await focusRegion("init-result");
+    }
+  }
+
+  // Onboarding, path 2 of 2 (issue #19): clones into the folder gitneighbr
+  // is already pointed at.
+  async function cloneHere() {
+    if (!cloneUrlValid) return;
+    cloneError = null;
+    cloning = true;
+    try {
+      const envelope = await postApi<Record<string, never>>("/api/v1/clone", { url: cloneUrl.trim() });
+      if (!envelope.ok) {
+        cloneError = envelope.error ?? { message: "Could not clone that repository." };
+        return;
+      }
+      await loadStatus();
+    } catch (err) {
+      cloneError = describeFetchError(err);
+    } finally {
+      cloning = false;
+      await focusRegion("clone-result");
+    }
+  }
+
+  // "Connect to GitHub" (issue #20, and the existing-repo-with-no-remote
+  // case): a repository whose `origin` already points elsewhere is refused
+  // as REMOTE_ALREADY_SET unless `force` is set, so that case is confirmed
+  // first, the same shape as `restoreFile()`/`trashFile()`.
+  async function publishRepo(force = false) {
+    if (!publishUrlValid) return;
+    if (!force) {
+      publishError = null;
+      publishSuccess = null;
+    }
+    publishing = true;
+    try {
+      const envelope = await postApi<PushResult>("/api/v1/publish", { url: publishUrl.trim(), force });
+      if (!envelope.ok || !envelope.data) {
+        if (envelope.error?.code === "REMOTE_ALREADY_SET") {
+          const existingUrl = (envelope.data as unknown as { existing_url?: string } | null)?.existing_url;
+          publishing = false;
+          const ok = await confirmDialog.confirm({
+            title: "Replace the connected GitHub repository?",
+            message: `This project is already connected to "${existingUrl ?? "another address"}". Connecting to a different address will replace that connection.`,
+            confirmLabel: "Replace",
+            danger: true,
+          });
+          if (ok) {
+            await publishRepo(true);
+          }
+          return;
+        }
+        publishError = envelope.error ?? { message: "Could not publish to GitHub." };
+        return;
+      }
+      publishSuccess = `Connected to ${envelope.data.remote} and sent ${envelope.data.pushed_count} snapshot${envelope.data.pushed_count === 1 ? "" : "s"}.`;
+      publishUrl = "";
+      await loadStatus();
+    } catch (err) {
+      publishError = describeFetchError(err);
+    } finally {
+      publishing = false;
+      await focusRegion("publish-result");
+    }
+  }
+
   async function loadMoreDiff() {
     if (!diff || !activePath) return;
     const path = activePath;
@@ -804,6 +907,40 @@
         <p class="branch">Branch: {status.branch}</p>
       {/if}
       <p class="state">{STATE_COPY[status.primary_state] ?? status.primary_state}</p>
+      {#if status.primary_state === "NOT_REPOSITORY"}
+        <section class="identity-section" aria-label="Set up this folder">
+          <h3>Initialize a Git repository here</h3>
+          <p>Start tracking changes in this folder. Any files already here are kept.</p>
+          <div id="init-result" tabindex="-1">
+            {#if initError}
+              {@render errorCard(initError)}
+            {/if}
+          </div>
+          <button type="button" class="update-button" disabled={initializing} onclick={initializeHere}>
+            {initializing ? "Initializing…" : "Initialize a Git repository here"}
+          </button>
+        </section>
+        <section class="identity-section" aria-label="Clone an existing GitHub repository">
+          <h3>Or clone an existing GitHub repository</h3>
+          <p>Copy a repository from GitHub into this folder.</p>
+          <label class="field" for="clone-url">GitHub repository address</label>
+          <input
+            id="clone-url"
+            type="text"
+            bind:value={cloneUrl}
+            placeholder="https://github.com/you/your-repo.git"
+            disabled={cloning}
+          />
+          <div id="clone-result" tabindex="-1">
+            {#if cloneError}
+              {@render errorCard(cloneError)}
+            {/if}
+          </div>
+          <button type="button" class="update-button" disabled={!cloneUrlValid || cloning} onclick={cloneHere}>
+            {cloning ? "Cloning…" : "Clone into this folder"}
+          </button>
+        </section>
+      {:else}
       <dl>
         <dt>Unsaved changes</dt>
         <dd>{status.staged_count + status.unstaged_count + status.untracked_count}</dd>
@@ -885,6 +1022,42 @@
           </button>
         </section>
       {/if}
+      {#if status.primary_state === "NO_UPSTREAM" || publishError || publishSuccess}
+        <section class="identity-section" aria-label="Connect to GitHub">
+          <h3>Connect to GitHub</h3>
+          {#if status.primary_state === "NO_UPSTREAM"}
+            <p>
+              Create an empty repository on GitHub, then paste its address here to connect this project to it and
+              send what's been saved so far.
+            </p>
+            <label class="field" for="publish-url">GitHub repository address</label>
+            <input
+              id="publish-url"
+              type="text"
+              bind:value={publishUrl}
+              placeholder="https://github.com/you/your-repo.git"
+              disabled={publishing}
+            />
+          {/if}
+          <div id="publish-result" tabindex="-1">
+            {#if publishError}
+              {@render errorCard(publishError)}
+            {:else if publishSuccess}
+              <p class="update-success" role="status">{publishSuccess}</p>
+            {/if}
+          </div>
+          {#if status.primary_state === "NO_UPSTREAM"}
+            <button
+              type="button"
+              class="update-button"
+              disabled={!publishUrlValid || publishing}
+              onclick={() => publishRepo(false)}
+            >
+              {publishing ? "Connecting…" : "Connect and send to GitHub"}
+            </button>
+          {/if}
+        </section>
+      {/if}
       {#if canUpdate || updateError || updateSuccess}
         <div class="update-section">
           {#if canUpdate}
@@ -921,6 +1094,7 @@
             </button>
           {/if}
         </div>
+      {/if}
       {/if}
     </div>
 

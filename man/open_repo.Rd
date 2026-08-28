@@ -37,3 +37,10 @@ Launches a local, loopback-only web server for the Git repository at
 server runs in an independent background process, so the R console is
 never blocked. Stop it later with \code{session$stop()} or \code{\link[=stop_session]{stop_session()}}.
 }
+\details{
+\code{path} need not already be a Git repository: if it isn't, the app opens
+to a guided onboarding screen that can initialize a new repository there
+or clone an existing GitHub repository into it (spec Sec 22, 0.2.0). A
+bare repository (no working tree) is still refused outright, since there
+is no in-app story for one.
+}

@@ -5,6 +5,12 @@
 #' server runs in an independent background process, so the R console is
 #' never blocked. Stop it later with `session$stop()` or [stop_session()].
 #'
+#' `path` need not already be a Git repository: if it isn't, the app opens
+#' to a guided onboarding screen that can initialize a new repository there
+#' or clone an existing GitHub repository into it (spec Sec 22, 0.2.0). A
+#' bare repository (no working tree) is still refused outright, since there
+#' is no in-app story for one.
+#'
 #' @param path Path inside the Git working tree to serve. Defaults to the
 #'   current directory.
 #' @param browse Whether to open the app in the default browser. Defaults to
@@ -54,19 +60,27 @@ open_repo <- function(path = ".",
       paste0("gitneighbr: '", path, "' is a bare repository (no working tree); gitneighbr needs a working tree.")
     )
   }
-  if (!identical(repo_kind, "worktree")) {
-    .stop_gitneighbr_error(
-      "NOT_REPOSITORY",
-      paste0("gitneighbr: '", path, "' is not inside a Git working tree.")
-    )
-  }
 
-  repo_root <- .git_root(path, git)
-  if (is.null(repo_root)) {
-    .stop_gitneighbr_error(
-      "NOT_REPOSITORY",
-      paste0("gitneighbr: '", path, "' is not inside a Git working tree.")
-    )
+  if (identical(repo_kind, "worktree")) {
+    repo_root <- .git_root(path, git)
+    if (is.null(repo_root)) {
+      .stop_gitneighbr_error(
+        "NOT_REPOSITORY",
+        paste0("gitneighbr: '", path, "' is not inside a Git working tree.")
+      )
+    }
+  } else {
+    # Not a repository (yet): serve `path` as-is so the in-app onboarding
+    # screen can initialize or clone into it. `fs::path_real()` requires an
+    # existing path, which this one may not be, so this only normalizes to
+    # an absolute path rather than resolving symlinks/`..` against disk.
+    repo_root <- tryCatch(fs::path_abs(path), error = function(e) NULL)
+    if (is.null(repo_root)) {
+      .stop_gitneighbr_error(
+        "NOT_REPOSITORY",
+        paste0("gitneighbr: '", path, "' is not a usable location.")
+      )
+    }
   }
 
   session <- .gitneighbr_serve(repo_root = repo_root, host = host, port = port, git_bin = git)

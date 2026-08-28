@@ -124,3 +124,12 @@ test_that(".status_payload only bumps status_version when the snapshot actually 
   expect_gt(third$version, second$version)
   expect_equal(third$data$unstaged_count, 1L)
 })
+
+test_that(".status_payload reports NOT_REPOSITORY instead of throwing for a non-repo path", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  dir <- withr::local_tempdir()
+
+  payload <- .status_payload(dir, git, new_session_state())
+  expect_equal(payload$data$primary_state, "NOT_REPOSITORY")
+})

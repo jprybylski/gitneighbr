@@ -330,3 +330,161 @@ test_that("POST /api/v1/refresh-remote and /api/v1/push send a local commit to G
   remote_log <- processx::run(git, c("-C", remote_dir, "log", "-1", "--format=%s", "main"), error_on_status = TRUE)
   expect_equal(trimws(remote_log$stdout), "local commit")
 })
+
+test_that("POST /api/v1/init turns an onboarding session into a real repository over HTTP", {
+  skip_on_cran()
+  skip_if_not_installed("httr2")
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  dir <- withr::local_tempdir()
+  session <- open_repo(path = dir, browse = FALSE)
+  withr::defer(session$stop())
+
+  full_url <- session$url(redact = FALSE)
+  token <- sub(".*token=", "", full_url)
+  base_url <- sub("#.*", "", full_url)
+
+  fetch_version <- function() {
+    httr2::request(paste0(base_url, "api/v1/status")) |>
+      httr2::req_auth_bearer_token(token) |>
+      httr2::req_perform() |>
+      httr2::resp_body_json() |>
+      (\(resp) resp$status_version)()
+  }
+
+  before <- httr2::request(paste0(base_url, "api/v1/status")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_equal(before$data$primary_state, "NOT_REPOSITORY")
+
+  initialized <- httr2::request(paste0(base_url, "api/v1/init")) |>
+    httr2::req_method("POST") |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(status_version = fetch_version())) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_true(initialized$ok)
+  expect_equal(.git_repo_kind(dir, git), "worktree")
+
+  after <- httr2::request(paste0(base_url, "api/v1/status")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_equal(after$data$primary_state, "NO_UPSTREAM")
+
+  again <- httr2::request(paste0(base_url, "api/v1/init")) |>
+    httr2::req_method("POST") |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(status_version = fetch_version())) |>
+    httr2::req_error(is_error = function(resp) FALSE) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_false(again$ok)
+  expect_equal(again$error$code, "ALREADY_A_REPOSITORY")
+})
+
+test_that("POST /api/v1/clone clones a repository into an onboarding session over HTTP", {
+  skip_on_cran()
+  skip_if_not_installed("httr2")
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  remote_dir <- withr::local_tempdir()
+  processx::run(git, c("init", "-q", "--bare", "-b", "main", remote_dir), error_on_status = TRUE)
+  seed_dir <- withr::local_tempdir()
+  seed_run <- function(...) processx::run(git, c("-C", seed_dir, ...), error_on_status = TRUE)
+  seed_run("init", "-q", "-b", "main")
+  seed_run("config", "user.email", "seed@example.com")
+  seed_run("config", "user.name", "Seed")
+  writeLines("seed", file.path(seed_dir, "seed.txt"))
+  seed_run("add", "seed.txt")
+  seed_run("commit", "-q", "-m", "seed commit")
+  seed_run("remote", "add", "origin", remote_dir)
+  seed_run("push", "-q", "-u", "origin", "main")
+
+  dest <- file.path(withr::local_tempdir(), "project")
+  session <- open_repo(path = dest, browse = FALSE)
+  withr::defer(session$stop())
+
+  full_url <- session$url(redact = FALSE)
+  token <- sub(".*token=", "", full_url)
+  base_url <- sub("#.*", "", full_url)
+
+  fetch_version <- function() {
+    httr2::request(paste0(base_url, "api/v1/status")) |>
+      httr2::req_auth_bearer_token(token) |>
+      httr2::req_perform() |>
+      httr2::resp_body_json() |>
+      (\(resp) resp$status_version)()
+  }
+
+  cloned <- httr2::request(paste0(base_url, "api/v1/clone")) |>
+    httr2::req_method("POST") |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(url = remote_dir, status_version = fetch_version())) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_true(cloned$ok)
+  expect_true(file.exists(file.path(dest, "seed.txt")))
+
+  after <- httr2::request(paste0(base_url, "api/v1/status")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_equal(after$data$upstream, "origin/main")
+})
+
+test_that("POST /api/v1/publish connects a local-only repository to GitHub and pushes over HTTP", {
+  skip_on_cran()
+  skip_if_not_installed("httr2")
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  remote_dir <- withr::local_tempdir()
+  processx::run(git, c("init", "-q", "--bare", "-b", "main", remote_dir), error_on_status = TRUE)
+
+  dir <- withr::local_tempdir()
+  run <- function(...) processx::run(git, c("-C", dir, ...), error_on_status = TRUE)
+  run("init", "-q", "-b", "main")
+  run("config", "user.email", "test@example.com")
+  run("config", "user.name", "Test")
+  writeLines("hello", file.path(dir, "hello.txt"))
+  run("add", "hello.txt")
+  run("commit", "-q", "-m", "initial commit")
+
+  session <- open_repo(path = dir, browse = FALSE)
+  withr::defer(session$stop())
+
+  full_url <- session$url(redact = FALSE)
+  token <- sub(".*token=", "", full_url)
+  base_url <- sub("#.*", "", full_url)
+
+  fetch_version <- function() {
+    httr2::request(paste0(base_url, "api/v1/status")) |>
+      httr2::req_auth_bearer_token(token) |>
+      httr2::req_perform() |>
+      httr2::resp_body_json() |>
+      (\(resp) resp$status_version)()
+  }
+
+  published <- httr2::request(paste0(base_url, "api/v1/publish")) |>
+    httr2::req_method("POST") |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(url = remote_dir, status_version = fetch_version())) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_true(published$ok)
+  expect_equal(published$data$remote, "origin")
+  expect_equal(published$data$pushed_count, 1L)
+
+  remote_log <- processx::run(git, c("-C", remote_dir, "log", "-1", "--format=%s", "main"), error_on_status = TRUE)
+  expect_equal(trimws(remote_log$stdout), "initial commit")
+
+  status <- httr2::request(paste0(base_url, "api/v1/status")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_equal(status$data$primary_state, "READY")
+})
