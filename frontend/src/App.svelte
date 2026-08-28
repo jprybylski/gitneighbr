@@ -1,4 +1,6 @@
 <script lang="ts">
+  type Notice = { code: string; message: string };
+
   type StatusData = {
     repository: { root_display: string };
     primary_state: string;
@@ -9,6 +11,8 @@
     staged_count: number;
     unstaged_count: number;
     untracked_count: number;
+    conflicted_count: number;
+    notices: Notice[];
   };
 
   type ChangeState = "NEW" | "CHANGED" | "RENAMED" | "DELETED" | "CONFLICTED";
@@ -39,6 +43,7 @@
     ok: boolean;
     data: T | null;
     error: { code: string; message: string; recoverable: boolean } | null;
+    status_version: number | null;
   };
 
   type PushResult = {
@@ -57,6 +62,8 @@
     REMOTE_ONLY_CLEAN: "GitHub has newer updates you don't have yet.",
     REMOTE_ONLY_DIRTY: "GitHub has newer updates, and you also have unsaved changes.",
     DIVERGED: "Local and GitHub work need help to combine.",
+    CONFLICTED: "Some files contain changes that need help to combine.",
+    AUTH_REQUIRED: "GitHub could not verify your access.",
     NO_UPSTREAM: "This branch isn't connected to GitHub yet.",
     DETACHED_HEAD: "You're not currently on a branch.",
     NOT_REPOSITORY: "This folder isn't a Git project.",
@@ -79,10 +86,12 @@
   const token = getToken();
 
   let status = $state<StatusData | null>(null);
+  let statusVersion = $state<number | null>(null);
   let changes = $state<ChangeEntry[]>([]);
   let selected = $state<Set<string>>(new Set());
   let errorMessage = $state<string | null>(null);
   let loading = $state(true);
+  let statusRequestInFlight = false;
 
   let activePath = $state<string | null>(null);
   let diff = $state<DiffData | null>(null);
@@ -112,27 +121,51 @@
     const res = await fetch(path, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    return (await res.json()) as Envelope<T>;
+    const envelope = (await res.json()) as Envelope<T>;
+    if (envelope.status_version != null) statusVersion = envelope.status_version;
+    return envelope;
   }
 
-  async function postApi<T>(path: string, body: unknown): Promise<Envelope<T>> {
+  // Every mutating call carries the last status_version this client
+  // observed (spec Sec 7.3); the server rejects a stale one with
+  // 409 STATE_CHANGED rather than acting on a display the user no longer
+  // sees, which still parses as an ordinary envelope here.
+  async function postApi<T>(path: string, body: Record<string, unknown>): Promise<Envelope<T>> {
     const res = await fetch(path, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, status_version: statusVersion }),
     });
-    return (await res.json()) as Envelope<T>;
+    const envelope = (await res.json()) as Envelope<T>;
+    if (envelope.status_version != null) statusVersion = envelope.status_version;
+    return envelope;
   }
 
-  async function loadStatus() {
-    if (!token) {
-      errorMessage = "Missing session token. Open this page via gitneighbr::open_repo().";
-      loading = false;
-      return;
+  // Keeps each still-present file's checkbox as the user left it, and
+  // defaults newly appeared files to selected - a naive replace would
+  // otherwise reset the whole selection on every background poll.
+  function reconcileSelection(previous: ChangeEntry[], next: ChangeEntry[]): Set<string> {
+    const previousPaths = new Set(previous.map((c) => c.path));
+    const result = new Set<string>();
+    for (const path of selected) {
+      if (previousPaths.has(path) && next.some((c) => c.path === path)) {
+        result.add(path);
+      }
     }
+    for (const change of next) {
+      if (!previousPaths.has(change.path)) {
+        result.add(change.path);
+      }
+    }
+    return result;
+  }
+
+  async function refresh() {
+    if (!token || statusRequestInFlight) return;
+    statusRequestInFlight = true;
     try {
       const [statusEnvelope, changesEnvelope] = await Promise.all([
         api<StatusData>("/api/v1/status"),
@@ -147,14 +180,40 @@
       }
 
       if (changesEnvelope.ok && changesEnvelope.data) {
+        selected = reconcileSelection(changes, changesEnvelope.data.changes);
         changes = changesEnvelope.data.changes;
-        selected = new Set(changes.map((c) => c.path));
       }
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : "Could not reach the gitneighbr server.";
     } finally {
-      loading = false;
+      statusRequestInFlight = false;
     }
+  }
+
+  async function loadStatus() {
+    if (!token) {
+      errorMessage = "Missing session token. Open this page via gitneighbr::open_repo().";
+      loading = false;
+      return;
+    }
+    await refresh();
+    loading = false;
+  }
+
+  // Spec Sec 7.3: poll every 2 seconds while the page is visible and
+  // coalesce so only one status calculation is in flight at a time
+  // (the `statusRequestInFlight` guard in `refresh()`); pause entirely
+  // while the document is hidden.
+  function startPolling() {
+    const POLL_MS = 2000;
+    setInterval(() => {
+      if (document.visibilityState === "visible" && !committing && !sending) {
+        refresh();
+      }
+    }, POLL_MS);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") refresh();
+    });
   }
 
   function toggleSelected(path: string) {
@@ -293,6 +352,7 @@
   }
 
   loadStatus();
+  startPolling();
 </script>
 
 <main>
@@ -319,7 +379,18 @@
         <dd>{status.ahead}</dd>
         <dt>Waiting on GitHub</dt>
         <dd>{status.behind}</dd>
+        {#if status.conflicted_count > 0}
+          <dt>Conflicted</dt>
+          <dd>{status.conflicted_count}</dd>
+        {/if}
       </dl>
+      {#if status.notices.length > 0}
+        <ul class="notices">
+          {#each status.notices as notice (notice.code)}
+            <li>{notice.message}</li>
+          {/each}
+        </ul>
+      {/if}
     </div>
 
     {#if changes.length > 0}
@@ -498,6 +569,15 @@
   }
   .state {
     font-weight: 600;
+  }
+  .notices {
+    margin: 1rem 0 0;
+    padding-left: 1.25rem;
+    color: #555;
+    font-size: 0.9rem;
+  }
+  .notices li {
+    margin-top: 0.25rem;
   }
   dl {
     display: grid;

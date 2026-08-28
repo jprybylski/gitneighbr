@@ -39,6 +39,7 @@ test_that("open_repo launches non-blocking, serves real status, and stops cleanl
   expect_true(status$ok)
   expect_equal(status$data$primary_state, "NO_UPSTREAM")
   expect_equal(status$data$branch, "main")
+  expect_true(is.numeric(status$status_version))
 
   session$stop()
   Sys.sleep(0.5)
@@ -66,9 +67,28 @@ test_that("POST /api/v1/commit saves exactly the selected files over HTTP", {
   token <- sub(".*token=", "", full_url)
   base_url <- sub("#.*", "", full_url)
 
+  fetch_version <- function() {
+    httr2::request(paste0(base_url, "api/v1/status")) |>
+      httr2::req_auth_bearer_token(token) |>
+      httr2::req_perform() |>
+      httr2::resp_body_json() |>
+      (\(resp) resp$status_version)()
+  }
+
+  stale <- httr2::request(paste0(base_url, "api/v1/commit")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(paths = list("keep.txt"), summary = "Add keep.txt", status_version = -1)) |>
+    httr2::req_error(is_error = function(resp) FALSE) |>
+    httr2::req_perform()
+  expect_equal(httr2::resp_status(stale), 409L)
+  stale_body <- httr2::resp_body_json(stale)
+  expect_false(stale_body$ok)
+  expect_equal(stale_body$error$code, "STATE_CHANGED")
+  expect_false(is.null(stale_body$data))
+
   bad_summary <- httr2::request(paste0(base_url, "api/v1/commit")) |>
     httr2::req_auth_bearer_token(token) |>
-    httr2::req_body_json(list(paths = list("keep.txt"), summary = "ab")) |>
+    httr2::req_body_json(list(paths = list("keep.txt"), summary = "ab", status_version = fetch_version())) |>
     httr2::req_error(is_error = function(resp) FALSE) |>
     httr2::req_perform() |>
     httr2::resp_body_json()
@@ -77,7 +97,7 @@ test_that("POST /api/v1/commit saves exactly the selected files over HTTP", {
 
   saved <- httr2::request(paste0(base_url, "api/v1/commit")) |>
     httr2::req_auth_bearer_token(token) |>
-    httr2::req_body_json(list(paths = list("keep.txt"), summary = "Add keep.txt")) |>
+    httr2::req_body_json(list(paths = list("keep.txt"), summary = "Add keep.txt", status_version = fetch_version())) |>
     httr2::req_perform() |>
     httr2::resp_body_json()
   expect_true(saved$ok)
@@ -127,9 +147,18 @@ test_that("POST /api/v1/refresh-remote and /api/v1/push send a local commit to G
   token <- sub(".*token=", "", full_url)
   base_url <- sub("#.*", "", full_url)
 
+  fetch_version <- function() {
+    httr2::request(paste0(base_url, "api/v1/status")) |>
+      httr2::req_auth_bearer_token(token) |>
+      httr2::req_perform() |>
+      httr2::resp_body_json() |>
+      (\(resp) resp$status_version)()
+  }
+
   refreshed <- httr2::request(paste0(base_url, "api/v1/refresh-remote")) |>
     httr2::req_method("POST") |>
     httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(status_version = fetch_version())) |>
     httr2::req_perform() |>
     httr2::resp_body_json()
   expect_true(refreshed$ok)
@@ -139,6 +168,7 @@ test_that("POST /api/v1/refresh-remote and /api/v1/push send a local commit to G
   pushed <- httr2::request(paste0(base_url, "api/v1/push")) |>
     httr2::req_method("POST") |>
     httr2::req_auth_bearer_token(token) |>
+    httr2::req_body_json(list(status_version = fetch_version())) |>
     httr2::req_perform() |>
     httr2::resp_body_json()
   expect_true(pushed$ok)

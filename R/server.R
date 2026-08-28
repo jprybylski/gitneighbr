@@ -49,11 +49,72 @@
     default = TRUE
   )
 
+  # Mutable state private to this one running server process, for the
+  # optimistic-concurrency contract in spec Sec 7.3: a monotonically
+  # increasing `status_version` (bumped only when computed status actually
+  # changes; see `.status_payload()`), the sticky `AUTH_REQUIRED` flag
+  # (spec Sec 7.1) set by a failed fetch/push and cleared by the next
+  # successful one, and the tag bookkeeping `.status_notices()` uses for
+  # the "local-only tag" / "pushed tag" notices.
+  session_state <- new.env(parent = emptyenv())
+  session_state$version <- 0L
+  session_state$last_snapshot <- NULL
+  session_state$auth_required <- FALSE
+  session_state$pending_tags <- character()
+  session_state$pushed_tags <- character()
+
   require_auth <- function(request) {
     supplied <- request$get_header("Authorization")
     supplied <- sub("^Bearer\\s+", "", supplied %||% "")
     if (!.tokens_match(supplied, token)) {
       plumber2::abort_unauthorized("Missing or invalid session token.")
+    }
+  }
+
+  # `request$parse()` requires an explicit named parser list on every call
+  # (it has no implicit default), so a malformed/absent JSON body is caught
+  # here and turned into `NULL` for callers to map onto the same envelope
+  # shape every other endpoint uses, instead of plumber2's plain-text 400.
+  parse_body <- function(request) {
+    tryCatch(
+      {
+        do.call(request$parse, plumber2::get_parsers())
+        request$body %||% list()
+      },
+      error = function(e) NULL
+    )
+  }
+
+  # Gate for every mutating endpoint (spec Sec 7.3): the client must name
+  # the `status_version` it last observed. A missing or non-current value
+  # is refused as a `409 STATE_CHANGED` carrying fresh status data, so the
+  # frontend can update its display without a second round trip. Returns
+  # `NULL` when the request may proceed.
+  require_fresh <- function(body, response) {
+    current <- .status_payload(repo_root, git_bin, session_state)
+    client_version <- suppressWarnings(as.integer(body$status_version %||% NA))
+    if (is.na(client_version) || client_version != current$version) {
+      response$status <- 409L
+      return(.error_envelope(
+        "STATE_CHANGED",
+        "The repository changed since this was shown. Refresh and try again.",
+        recoverable = TRUE,
+        status_version = current$version,
+        data = current$data
+      ))
+    }
+    NULL
+  }
+
+  # Records whether a fetch/push result implies the sticky AUTH_REQUIRED
+  # flag should change; a failure for an unrelated reason (e.g. the
+  # network being unreachable) leaves the previous flag untouched, since
+  # it says nothing new about authentication either way.
+  note_auth_result <- function(result) {
+    if (isTRUE(result$ok)) {
+      session_state$auth_required <- FALSE
+    } else if (identical(result$code, "AUTH_REQUIRED")) {
+      session_state$auth_required <- TRUE
     }
   }
 
@@ -73,23 +134,9 @@
     plumber2::api_get("/api/v1/status", function(request) {
       require_auth(request)
 
-      git_ok <- .git_available(git_bin)
-      status <- if (git_ok) .git_status(repo_root, git_bin) else NULL
-      state <- .primary_state(status, git_ok)
-
-      .ok_envelope(list(
-        repository = list(
-          root_display = fs::path_file(repo_root)
-        ),
-        primary_state = state,
-        upstream = status$upstream,
-        branch = status$branch,
-        ahead = status$ahead %||% 0L,
-        behind = status$behind %||% 0L,
-        staged_count = status$staged_count %||% 0L,
-        unstaged_count = status$unstaged_count %||% 0L,
-        untracked_count = status$untracked_count %||% 0L
-      ))
+      show_ignored <- identical(request$query$show_ignored, "true")
+      payload <- .status_payload(repo_root, git_bin, session_state, show_ignored = show_ignored)
+      .ok_envelope(payload$data, status_version = payload$version)
     }) |>
     plumber2::api_get("/api/v1/changes", function(request) {
       require_auth(request)
@@ -126,26 +173,19 @@
       }
       .ok_envelope(result[names(result) != "found"])
     }) |>
-    plumber2::api_post("/api/v1/commit", function(request) {
+    plumber2::api_post("/api/v1/commit", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
-
-      # `request$parse()` requires an explicit named parser list on every
-      # call (it has no implicit default), so a malformed/absent JSON body
-      # is caught here and turned into the same envelope shape every other
-      # endpoint uses, instead of plumber2's plain-text 400 response.
-      body <- tryCatch(
-        {
-          do.call(request$parse, plumber2::get_parsers())
-          request$body %||% list()
-        },
-        error = function(e) NULL
-      )
+      body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
       }
 
       result <- .git_commit_selected(
@@ -154,44 +194,73 @@
         summary = body$summary,
         details = body$details
       )
+      payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
       }
-      .ok_envelope(list(sha = result$sha, summary = result$summary))
+      .ok_envelope(list(sha = result$sha, summary = result$summary), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/refresh-remote", function(request) {
+    plumber2::api_post("/api/v1/refresh-remote", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      body <- parse_body(request)
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
       }
 
       result <- .git_refresh_remote(repo_root, git_bin)
+      note_auth_result(result)
+      payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
       }
-      status <- result[names(result) != "ok"]
       .ok_envelope(list(
-        primary_state = .primary_state(status, TRUE),
-        upstream = status$upstream,
-        branch = status$branch,
-        ahead = status$ahead %||% 0L,
-        behind = status$behind %||% 0L,
-        staged_count = status$staged_count %||% 0L,
-        unstaged_count = status$unstaged_count %||% 0L,
-        untracked_count = status$untracked_count %||% 0L
-      ))
+        primary_state = payload$data$primary_state,
+        upstream = result$upstream,
+        branch = result$branch,
+        ahead = result$ahead %||% 0L,
+        behind = result$behind %||% 0L,
+        staged_count = result$staged_count %||% 0L,
+        unstaged_count = result$unstaged_count %||% 0L,
+        untracked_count = result$untracked_count %||% 0L
+      ), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/push", function(request) {
+    plumber2::api_post("/api/v1/push", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
+      body <- parse_body(request)
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
 
       result <- .git_push_current_branch(repo_root, git_bin)
+      note_auth_result(result)
+      payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
       }
       .ok_envelope(list(
         remote = result$remote,
@@ -199,18 +268,31 @@
         branch = result$branch,
         sha = result$sha,
         pushed_count = result$pushed_count
-      ))
+      ), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/update", function(request) {
+    plumber2::api_post("/api/v1/update", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
+      body <- parse_body(request)
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
 
       result <- .git_update_current_branch(repo_root, git_bin)
+      note_auth_result(result)
+      payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
       }
       .ok_envelope(list(
         remote = result$remote,
@@ -218,131 +300,140 @@
         branch = result$branch,
         sha = result$sha,
         updated_count = result$updated_count
-      ))
+      ), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/tag", function(request) {
+    plumber2::api_post("/api/v1/tag", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
-
-      body <- tryCatch(
-        {
-          do.call(request$parse, plumber2::get_parsers())
-          request$body %||% list()
-        },
-        error = function(e) NULL
-      )
+      body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
       }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
 
-      result <- .git_create_tag(
-        repo_root, git_bin,
-        name = body$name,
-        annotation = body$annotation
-      )
+      result <- .git_create_tag(repo_root, git_bin, name = body$name, annotation = body$annotation)
+      if (isTRUE(result$ok)) {
+        session_state$pending_tags <- union(session_state$pending_tags, result$name)
+      }
+      payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
       }
-      .ok_envelope(list(name = result$name, sha = result$sha))
+      .ok_envelope(list(name = result$name, sha = result$sha), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/push-tag", function(request) {
+    plumber2::api_post("/api/v1/push-tag", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
-
-      body <- tryCatch(
-        {
-          do.call(request$parse, plumber2::get_parsers())
-          request$body %||% list()
-        },
-        error = function(e) NULL
-      )
+      body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
       }
 
       result <- .git_push_tag(repo_root, git_bin, name = body$name)
-      if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+      note_auth_result(result)
+      if (isTRUE(result$ok)) {
+        session_state$pending_tags <- setdiff(session_state$pending_tags, result$name)
+        session_state$pushed_tags <- union(session_state$pushed_tags, result$name)
       }
-      .ok_envelope(list(remote = result$remote, name = result$name))
+      payload <- .status_payload(repo_root, git_bin, session_state)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
+      }
+      .ok_envelope(list(remote = result$remote, name = result$name), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/restore", function(request) {
+    plumber2::api_post("/api/v1/restore", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
-
-      body <- tryCatch(
-        {
-          do.call(request$parse, plumber2::get_parsers())
-          request$body %||% list()
-        },
-        error = function(e) NULL
-      )
+      body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
       }
 
       result <- .git_restore_tracked_file(repo_root, git_bin, path = body$path)
+      payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
       }
-      .ok_envelope(list(path = result$path))
+      .ok_envelope(list(path = result$path), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/trash", function(request) {
+    plumber2::api_post("/api/v1/trash", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
-
-      body <- tryCatch(
-        {
-          do.call(request$parse, plumber2::get_parsers())
-          request$body %||% list()
-        },
-        error = function(e) NULL
-      )
+      body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
       }
 
       result <- .git_trash_untracked_file(repo_root, git_bin, path = body$path)
+      payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
       }
-      .ok_envelope(list(path = result$path))
+      .ok_envelope(list(path = result$path), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/ignore", function(request) {
+    plumber2::api_post("/api/v1/ignore", function(request, response) {
       require_auth(request)
 
       if (!.git_available(git_bin)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
-
-      body <- tryCatch(
-        {
-          do.call(request$parse, plumber2::get_parsers())
-          request$body %||% list()
-        },
-        error = function(e) NULL
-      )
+      body <- parse_body(request)
       if (is.null(body)) {
         return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
       }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
 
       result <- .git_ignore_path(repo_root, git_bin, path = body$path)
+      payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
-        return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version
+        ))
       }
-      .ok_envelope(list(path = result$path, rule = result$rule, added = result$added))
+      .ok_envelope(list(path = result$path, rule = result$rule, added = result$added), status_version = payload$version)
     })
 }
 

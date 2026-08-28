@@ -2,12 +2,15 @@
 #'
 #' Mirrors the envelope shape described in the project spec: every response
 #' carries `ok`, `data`, `error`, and `status_version`, and every error has a
-#' stable `code`, a human `message`, and a `recoverable` flag.
+#' stable `code`, a human `message`, and a `recoverable` flag. `data` is
+#' `NULL` for ordinary errors, but a `409 STATE_CHANGED` rejection embeds
+#' fresh status data here so the frontend can update its display without an
+#' extra round trip (spec Sec 7.3).
 #' @noRd
-.error_envelope <- function(code, message, recoverable = TRUE, status_version = NULL) {
+.error_envelope <- function(code, message, recoverable = TRUE, status_version = NULL, data = NULL) {
   list(
     ok = FALSE,
-    data = NULL,
+    data = data,
     error = list(
       code = code,
       message = message,

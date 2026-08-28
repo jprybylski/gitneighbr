@@ -42,8 +42,8 @@
 #' as literal bytes; full raw-path fidelity is tracked as a Phase 1 issue.
 #'
 #' @return A list with `branch`, `upstream`, `ahead`, `behind`,
-#'   `staged_count`, `unstaged_count`, `untracked_count`, `has_changes`,
-#'   `detached`, `unborn`.
+#'   `staged_count`, `unstaged_count`, `untracked_count`, `conflicted_count`,
+#'   `has_changes`, `detached`, `unborn`.
 #' @noRd
 .git_status <- function(repo_root, git_bin) {
   result <- processx::run(
@@ -69,6 +69,7 @@
   staged_count <- 0L
   unstaged_count <- 0L
   untracked_count <- 0L
+  conflicted_count <- 0L
 
   i <- 1L
   n <- length(tokens)
@@ -91,7 +92,7 @@
         ahead <- as.integer(sub("^\\+", "", parts[[1]]))
         behind <- as.integer(sub("^-", "", parts[[2]]))
       }
-    } else if (kind %in% c("1", "2", "u")) {
+    } else if (kind %in% c("1", "2")) {
       xy <- substr(token, 3, 4)
       x <- substr(xy, 1, 1)
       y <- substr(xy, 2, 2)
@@ -99,6 +100,12 @@
       if (y != ".") unstaged_count <- unstaged_count + 1L
       # Rename/copy ("2") entries carry both paths on this same line,
       # tab-separated; no extra line to consume.
+    } else if (kind == "u") {
+      # Unmerged entries share the "1"/"2" line shape but their XY column
+      # encodes each side's conflict state (e.g. "UU"), not a staged vs.
+      # unstaged split, so they are counted separately rather than folded
+      # into staged/unstaged counts.
+      conflicted_count <- conflicted_count + 1L
     } else if (kind == "?") {
       untracked_count <- untracked_count + 1L
     }
@@ -117,6 +124,7 @@
     staged_count = staged_count,
     unstaged_count = unstaged_count,
     untracked_count = untracked_count,
-    has_changes = (staged_count + unstaged_count + untracked_count) > 0L
+    conflicted_count = conflicted_count,
+    has_changes = (staged_count + unstaged_count + untracked_count + conflicted_count) > 0L
   )
 }
