@@ -127,6 +127,47 @@
 
   const token = getToken();
 
+  // Dark mode (issue: simple theme toggle). "system" follows the OS/browser
+  // `prefers-color-scheme` (the CSS handles that case with no JS help at
+  // all - this only needs to track an explicit override). There's no
+  // reliable way to read RStudio/Positron's editor theme from a page
+  // rendered in their Viewer pane, so "system" is the closest we can get to
+  // "match my IDE" - most webviews already forward the OS-level dark mode
+  // setting, so this still lines up for many users.
+  type Theme = "light" | "dark" | "system";
+  const THEME_KEY = "gitneighbr-theme";
+  const THEME_CYCLE: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
+  const THEME_LABEL: Record<Theme, string> = { system: "Auto", light: "Light", dark: "Dark" };
+
+  function loadTheme(): Theme {
+    try {
+      const saved = localStorage.getItem(THEME_KEY);
+      return saved === "light" || saved === "dark" ? saved : "system";
+    } catch {
+      return "system";
+    }
+  }
+
+  let theme = $state<Theme>(loadTheme());
+
+  $effect(() => {
+    if (theme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.dataset.theme = theme;
+    }
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // Storage unavailable (private browsing, restricted webview) - the
+      // toggle still works for the rest of this session.
+    }
+  });
+
+  function cycleTheme() {
+    theme = THEME_CYCLE[theme];
+  }
+
   let status = $state<StatusData | null>(null);
   let statusVersion = $state<number | null>(null);
   let changes = $state<ChangeEntry[]>([]);
@@ -893,8 +934,20 @@
 <ConfirmDialog bind:this={confirmDialog} />
 
 <main>
-  <h1>gitneighbr</h1>
-  <p class="tagline">Be a good neighbor to your repository.</p>
+  <div class="header-row">
+    <div>
+      <h1>gitneighbr</h1>
+      <p class="tagline">Be a good neighbor to your repository.</p>
+    </div>
+    <button
+      type="button"
+      class="theme-toggle"
+      onclick={cycleTheme}
+      aria-label={`Color theme: ${THEME_LABEL[theme]}. Click to change.`}
+    >
+      {THEME_LABEL[theme]}
+    </button>
+  </div>
 
   {#if loading}
     <p>Checking repository status&hellip;</p>
@@ -1349,6 +1402,93 @@
 </main>
 
 <style>
+  /* Theme tokens: light values on :root, overridden either automatically by
+     `prefers-color-scheme` (the "Auto" setting - see the `theme` state in
+     <script>) or explicitly once the user picks Light/Dark, via
+     [data-theme] on <html>. Declaring everything as a variable here is what
+     lets the rest of this stylesheet stay theme-agnostic. */
+  :global(:root) {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-muted: #fafafa;
+    --text: #1a1a1a;
+    --text-muted: #555555;
+    --border: #dddddd;
+    --border-subtle: #eeeeee;
+    --input-border: #cccccc;
+    --accent: #0056b3;
+    --accent-bg: #eaf1fb;
+    --success: #1e7e34;
+    --success-bg: #eaf7ec;
+    --danger: #c0392b;
+    --danger-text: #922b21;
+    --danger-bg: #fdecea;
+    --warning: #856404;
+    --warning-bg: #fff8e1;
+    --purple: #6f42c1;
+    --diff-add-bg: #eaffea;
+    --diff-del-bg: #ffecec;
+    --active-row-bg: #f3f6fb;
+    --diff-pane-bg: #f3f6fb;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) {
+      --bg: #16181d;
+      --surface: #1e2128;
+      --surface-muted: #23262d;
+      --text: #e8e8e8;
+      --text-muted: #a0a5ad;
+      --border: #3a3e46;
+      --border-subtle: #2c2f36;
+      --input-border: #4a4f59;
+      --accent: #7ab0f7;
+      --accent-bg: #1c2c40;
+      --success: #55b979;
+      --success-bg: #1b3324;
+      --danger: #e8897d;
+      --danger-text: #f3a99e;
+      --danger-bg: #3a201d;
+      --warning: #e0b04a;
+      --warning-bg: #3a2f13;
+      --purple: #b696f2;
+      --diff-add-bg: #16321c;
+      --diff-del-bg: #3a1c1c;
+      --active-row-bg: #232a35;
+      --diff-pane-bg: #1b222c;
+    }
+  }
+
+  :global(:root[data-theme="dark"]) {
+    --bg: #16181d;
+    --surface: #1e2128;
+    --surface-muted: #23262d;
+    --text: #e8e8e8;
+    --text-muted: #a0a5ad;
+    --border: #3a3e46;
+    --border-subtle: #2c2f36;
+    --input-border: #4a4f59;
+    --accent: #7ab0f7;
+    --accent-bg: #1c2c40;
+    --success: #55b979;
+    --success-bg: #1b3324;
+    --danger: #e8897d;
+    --danger-text: #f3a99e;
+    --danger-bg: #3a201d;
+    --warning: #e0b04a;
+    --warning-bg: #3a2f13;
+    --purple: #b696f2;
+    --diff-add-bg: #16321c;
+    --diff-del-bg: #3a1c1c;
+    --active-row-bg: #232a35;
+    --diff-pane-bg: #1b222c;
+  }
+
+  :global(body) {
+    background: var(--bg);
+  }
+
   .sr-only {
     position: absolute;
     width: 1px;
@@ -1366,7 +1506,7 @@
      they aren't in the normal tab order - always show where focus landed. */
   [id$="-result"]:focus,
   #diff-pane:focus {
-    outline: 2px solid #0056b3;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
     border-radius: 0.2rem;
   }
@@ -1385,25 +1525,47 @@
     margin: 3rem auto;
     padding: 0 1.5rem;
     font-family: system-ui, sans-serif;
-    color: #1a1a1a;
+    color: var(--text);
+    background: var(--bg);
+  }
+  .header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
   }
   h1 {
     margin-bottom: 0;
   }
   .tagline {
     margin-top: 0.25rem;
-    color: #555;
+    color: var(--text-muted);
+  }
+  .theme-toggle {
+    flex-shrink: 0;
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.35rem 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .theme-toggle:hover {
+    border-color: var(--accent);
   }
   .card {
-    border: 1px solid #ddd;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 1.25rem;
     margin-top: 1.5rem;
+    background: var(--surface);
   }
   .card.error {
-    border-color: #c0392b;
-    background: #fdecea;
-    color: #922b21;
+    border-color: var(--danger);
+    background: var(--danger-bg);
+    color: var(--danger-text);
   }
   .error-title {
     font-weight: 600;
@@ -1436,7 +1598,7 @@
   .advanced-stderr {
     margin: 0.5rem 0 0;
     padding: 0.5rem;
-    background: rgba(0, 0, 0, 0.05);
+    background: rgba(128, 128, 128, 0.15);
     border-radius: 0.35rem;
     font-family: ui-monospace, monospace;
     font-size: 0.8rem;
@@ -1446,13 +1608,13 @@
     overflow-y: auto;
   }
   .card.success {
-    border-color: #1e7e34;
-    background: #eaf7ec;
-    color: #1e7e34;
+    border-color: var(--success);
+    background: var(--success-bg);
+    color: var(--success);
   }
   .branch {
     font-family: ui-monospace, monospace;
-    color: #555;
+    color: var(--text-muted);
   }
   .state {
     font-weight: 600;
@@ -1460,7 +1622,7 @@
   .notices {
     margin: 1rem 0 0;
     padding-left: 1.25rem;
-    color: #555;
+    color: var(--text-muted);
     font-size: 0.9rem;
   }
   .notices li {
@@ -1472,9 +1634,9 @@
   .identity-section {
     margin-top: 1rem;
     padding: 0.75rem;
-    border: 1px solid #eee;
+    border: 1px solid var(--border-subtle);
     border-radius: 0.4rem;
-    background: #fafafa;
+    background: var(--surface-muted);
   }
   .identity-section h3 {
     margin: 0 0 0.35rem;
@@ -1482,7 +1644,7 @@
   }
   .identity-section p {
     margin: 0 0 0.5rem;
-    color: #555;
+    color: var(--text-muted);
     font-size: 0.9rem;
   }
   .identity-section .field {
@@ -1497,8 +1659,10 @@
     box-sizing: border-box;
     font: inherit;
     padding: 0.5rem 0.6rem;
-    border: 1px solid #ccc;
+    border: 1px solid var(--input-border);
     border-radius: 0.4rem;
+    background: var(--surface);
+    color: var(--text);
   }
   .identity-section .update-button {
     margin-top: 1rem;
@@ -1507,10 +1671,10 @@
     font: inherit;
     font-weight: 600;
     padding: 0.45rem 1rem;
-    border: 1px solid #0056b3;
+    border: 1px solid var(--accent);
     border-radius: 0.4rem;
-    background: #eaf1fb;
-    color: #0056b3;
+    background: var(--accent-bg);
+    color: var(--accent);
     cursor: pointer;
   }
   .update-button:disabled {
@@ -1518,7 +1682,7 @@
     opacity: 0.6;
   }
   .update-success {
-    color: #1e7e34;
+    color: var(--success);
     font-weight: 600;
     margin-top: 0.5rem;
   }
@@ -1529,7 +1693,7 @@
     margin-top: 1rem;
   }
   dt {
-    color: #555;
+    color: var(--text-muted);
   }
   dd {
     margin: 0;
@@ -1544,7 +1708,7 @@
     list-style: none;
     margin: 0.75rem 0 0;
     padding: 0;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     overflow: hidden;
   }
@@ -1553,13 +1717,13 @@
     flex-direction: column;
     gap: 0.4rem;
     padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--border-subtle);
   }
   .change-row:last-child {
     border-bottom: none;
   }
   .change-row.active {
-    background: #f3f6fb;
+    background: var(--active-row-bg);
   }
   .change-row-main {
     display: flex;
@@ -1577,20 +1741,21 @@
     font-size: 0.8rem;
     padding: 0.3rem 0.7rem;
     border-radius: 0.4rem;
-    border: 1px solid #ccc;
-    background: white;
+    border: 1px solid var(--input-border);
+    background: var(--surface);
+    color: var(--text);
     cursor: pointer;
   }
   .row-action-button.danger {
-    border-color: #c0392b;
-    color: #922b21;
+    border-color: var(--danger);
+    color: var(--danger-text);
   }
   .row-action-button:disabled {
     cursor: default;
     opacity: 0.6;
   }
   .row-success {
-    color: #1e7e34;
+    color: var(--success);
     font-weight: 600;
   }
   .change-select {
@@ -1606,7 +1771,7 @@
     font-family: ui-monospace, monospace;
     font-size: 0.9rem;
     cursor: pointer;
-    color: #1a1a1a;
+    color: var(--text);
     min-width: 0;
     overflow-wrap: anywhere;
   }
@@ -1623,24 +1788,24 @@
     white-space: nowrap;
   }
   .tag-new {
-    color: #1e7e34;
+    color: var(--success);
   }
   .tag-changed {
-    color: #856404;
+    color: var(--warning);
   }
   .tag-renamed {
-    color: #0056b3;
+    color: var(--accent);
   }
   .tag-deleted {
-    color: #c0392b;
+    color: var(--danger);
   }
   .tag-conflicted {
-    color: #922b21;
+    color: var(--danger-text);
   }
   .change-flag {
     font-size: 0.75rem;
-    color: #555;
-    border: 1px solid #ccc;
+    color: var(--text-muted);
+    border: 1px solid var(--input-border);
     border-radius: 999px;
     padding: 0.15rem 0.5rem;
     white-space: nowrap;
@@ -1651,19 +1816,19 @@
     white-space: nowrap;
   }
   .stat-add {
-    color: #1e7e34;
+    color: var(--success);
   }
   .stat-del {
-    color: #c0392b;
+    color: var(--danger);
     margin-left: 0.35rem;
   }
 
   .diff-pane {
     margin-top: 1.5rem;
-    border: 1px solid #0056b3;
+    border: 1px solid var(--accent);
     border-radius: 0.5rem;
     padding: 1.25rem;
-    background: #f3f6fb;
+    background: var(--diff-pane-bg);
     scroll-margin-top: 1rem;
   }
   .diff-pane-header {
@@ -1683,17 +1848,17 @@
     font: inherit;
     font-size: 0.85rem;
     padding: 0.3rem 0.8rem;
-    border: 1px solid #0056b3;
+    border: 1px solid var(--accent);
     border-radius: 0.4rem;
-    background: white;
-    color: #0056b3;
+    background: var(--surface);
+    color: var(--accent);
     cursor: pointer;
   }
   .diff-binary {
-    color: #555;
+    color: var(--text-muted);
   }
   .diff-body {
-    border: 1px solid #ddd;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 0.75rem;
     overflow-x: auto;
@@ -1702,6 +1867,8 @@
     line-height: 1.4;
     white-space: pre;
     tab-size: 4;
+    background: var(--surface);
+    color: var(--text);
   }
   .diff-line {
     display: block;
@@ -1712,28 +1879,29 @@
     user-select: none;
   }
   .diff-add {
-    background: #eaffea;
-    color: #1e7e34;
+    background: var(--diff-add-bg);
+    color: var(--success);
   }
   .diff-del {
-    background: #ffecec;
-    color: #c0392b;
+    background: var(--diff-del-bg);
+    color: var(--danger);
   }
   .diff-hunk {
-    color: #6f42c1;
+    color: var(--purple);
     font-weight: 600;
   }
   .diff-header {
-    color: #555;
+    color: var(--text-muted);
     font-weight: 600;
   }
   .load-more {
     margin-top: 0.75rem;
     font: inherit;
     padding: 0.4rem 0.9rem;
-    border: 1px solid #ccc;
+    border: 1px solid var(--input-border);
     border-radius: 0.4rem;
-    background: white;
+    background: var(--surface);
+    color: var(--text);
     cursor: pointer;
   }
   .load-more:disabled {
@@ -1743,15 +1911,16 @@
 
   .commit-form {
     margin-top: 2rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 1.25rem;
+    background: var(--surface);
   }
   .commit-form h2 {
     margin-top: 0;
   }
   .selection-count {
-    color: #555;
+    color: var(--text-muted);
     margin-top: -0.5rem;
   }
   .commit-form .field {
@@ -1763,7 +1932,7 @@
   .commit-form .required,
   .commit-form .optional {
     font-weight: 400;
-    color: #555;
+    color: var(--text-muted);
   }
   .commit-form input[type="text"],
   .commit-form textarea {
@@ -1771,8 +1940,10 @@
     box-sizing: border-box;
     font: inherit;
     padding: 0.5rem 0.6rem;
-    border: 1px solid #ccc;
+    border: 1px solid var(--input-border);
     border-radius: 0.4rem;
+    background: var(--surface);
+    color: var(--text);
   }
   .commit-form textarea {
     resize: vertical;
@@ -1787,24 +1958,24 @@
   .tag-fields {
     margin-top: 0.5rem;
     padding: 0.75rem;
-    border: 1px solid #eee;
+    border: 1px solid var(--border-subtle);
     border-radius: 0.4rem;
-    background: #fafafa;
+    background: var(--surface-muted);
   }
   .tag-fields .field:first-child {
     margin-top: 0;
   }
   .partial-failure {
-    color: #856404;
+    color: var(--warning);
   }
   .retry-button {
     margin-top: 0.75rem;
     font: inherit;
     padding: 0.4rem 0.9rem;
-    border: 1px solid #856404;
+    border: 1px solid var(--warning);
     border-radius: 0.4rem;
-    background: #fff8e1;
-    color: #856404;
+    background: var(--warning-bg);
+    color: var(--warning);
     cursor: pointer;
   }
   .retry-button:disabled {
@@ -1816,10 +1987,10 @@
     font: inherit;
     font-weight: 600;
     padding: 0.5rem 1.1rem;
-    border: 1px solid #1e7e34;
+    border: 1px solid var(--success);
     border-radius: 0.4rem;
-    background: #eaf7ec;
-    color: #1e7e34;
+    background: var(--success-bg);
+    color: var(--success);
     cursor: pointer;
   }
   .save-button:disabled {
