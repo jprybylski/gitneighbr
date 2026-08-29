@@ -3,6 +3,7 @@
 S3method(print,gitneighbr_doctor_report)
 export(GitneighbrSession)
 export(doctor)
+export(gitneighbr_addin)
 export(open_repo)
 export(stop_session)
 importFrom(R6,R6Class)

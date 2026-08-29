@@ -1,0 +1,4 @@
+Name: Open gitneighbr
+Description: Launch the gitneighbr app for the current working directory
+Binding: gitneighbr_addin
+Interactive: false
