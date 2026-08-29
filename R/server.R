@@ -282,6 +282,19 @@
       }
       .ok_envelope(.git_credential_diagnosis(repo_root, git_bin))
     }) |>
+    plumber2::api_get("/api/v1/diagnostic-report", function(request) {
+      validate_host(request)
+      require_auth(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
+      .ok_envelope(list(report = .diagnostic_report(repo_root, git_bin, session_state)))
+    }) |>
     plumber2::api_post("/api/v1/identity", function(request, response) {
       validate_host(request)
       require_auth(request)

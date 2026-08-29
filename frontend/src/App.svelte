@@ -96,6 +96,19 @@
     guidance: string[];
   };
 
+  type DiagnosticCommand = { command: string; exit_status: number | null; stdout: string; stderr: string };
+
+  type DiagnosticReport = {
+    generated_at: string;
+    primary_state: string;
+    branch: string | null;
+    upstream: string | null;
+    ahead: number;
+    behind: number;
+    conflicted_files: string[];
+    commands: DiagnosticCommand[];
+  };
+
   const STATE_COPY: Record<string, string> = {
     READY: "Everything is saved and up to date.",
     CHANGES_ONLY: "You have unsaved changes.",
@@ -245,6 +258,12 @@
   let authRetrying = $state(false);
   let authRetryError = $state<ApiError | null>(null);
 
+  // Conflict/divergence diagnostic export (issue #21): user-triggered, not
+  // preloaded like credential diagnostics above, since generating it isn't
+  // needed until someone actually wants to hand the report to someone else.
+  let diagnosticLoading = $state(false);
+  let diagnosticError = $state<ApiError | null>(null);
+
   const summaryLength = $derived(summary.trim().length);
   const summaryValid = $derived(summaryLength >= 3 && summaryLength <= 72);
   const tagNameValid = $derived(!markAsVersion || tagName.trim().length > 0);
@@ -258,6 +277,9 @@
   // the only way to trigger "Send to GitHub" when there's nothing to save.
   const canSendStandalone = $derived(canSend && changes.length === 0 && status?.ahead != null && status.ahead > 0 && !sending);
   const identityNeeded = $derived(status?.notices.some((n) => n.code === "IDENTITY_INCOMPLETE") ?? false);
+  const needsHandoff = $derived(
+    status?.primary_state === "CONFLICTED" || status?.primary_state === "DIVERGED",
+  );
   const otherNotices = $derived(status?.notices.filter((n) => n.code !== "IDENTITY_INCOMPLETE") ?? []);
   const identityValid = $derived(
     identityName.trim().length > 0 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identityEmail.trim()),
@@ -710,6 +732,62 @@
     }
   }
 
+  // Conflict/divergence diagnostic export (issue #21): renders the report
+  // as plain text and hands it to the browser as a download rather than
+  // just displaying it, since the point is to give the user something to
+  // paste into an email or chat message to someone more experienced.
+  function formatDiagnosticReport(report: DiagnosticReport): string {
+    const lines = [
+      "gitneighbr diagnostic report",
+      `Generated: ${report.generated_at}`,
+      `State: ${STATE_COPY[report.primary_state] ?? report.primary_state}`,
+      `Branch: ${report.branch ?? "(none)"}`,
+      `Upstream: ${report.upstream ?? "(none)"}`,
+      `Ahead: ${report.ahead}  Behind: ${report.behind}`,
+    ];
+    if (report.conflicted_files.length > 0) {
+      lines.push("", "Conflicted files:", ...report.conflicted_files.map((f) => `  ${f}`));
+    }
+    lines.push("", "Commands gitneighbr checked:");
+    for (const cmd of report.commands) {
+      lines.push("", `$ ${cmd.command}`, `(exit status: ${cmd.exit_status ?? "unknown"})`);
+      if (cmd.stdout.trim()) lines.push(cmd.stdout.trimEnd());
+      if (cmd.stderr.trim()) lines.push(cmd.stderr.trimEnd());
+    }
+    return lines.join("\n") + "\n";
+  }
+
+  function downloadDiagnosticReport(report: DiagnosticReport) {
+    const text = formatDiagnosticReport(report);
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `gitneighbr-diagnostic-${report.generated_at.replace(/[^0-9a-z]/gi, "-")}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportDiagnosticReport() {
+    diagnosticLoading = true;
+    diagnosticError = null;
+    try {
+      const envelope = await api<{ report: DiagnosticReport }>("/api/v1/diagnostic-report");
+      if (!envelope.ok || !envelope.data) {
+        diagnosticError = envelope.error ?? { message: "Could not generate a diagnostic report." };
+        return;
+      }
+      downloadDiagnosticReport(envelope.data.report);
+    } catch (err) {
+      diagnosticError = describeFetchError(err);
+    } finally {
+      diagnosticLoading = false;
+      await focusRegion("diagnostic-result");
+    }
+  }
+
   // Credential diagnostics (issue #18): the AUTH_REQUIRED state is sticky
   // server-side until a fetch/push succeeds again, so this is the one
   // retry path that always stays available for it regardless of which
@@ -1012,6 +1090,24 @@
             <li>{notice.message}</li>
           {/each}
         </ul>
+      {/if}
+      {#if needsHandoff}
+        <section class="identity-section" aria-label="Get help with this repository">
+          <h3>Get help from someone experienced with Git</h3>
+          <p>
+            gitneighbr won't combine these changes on its own. Download a diagnostic report to share with someone
+            who can help - it includes this repository's state and the exact Git commands gitneighbr checked, with
+            passwords and tokens removed.
+          </p>
+          <div id="diagnostic-result" tabindex="-1">
+            {#if diagnosticError}
+              {@render errorCard(diagnosticError)}
+            {/if}
+          </div>
+          <button type="button" class="update-button" disabled={diagnosticLoading} onclick={exportDiagnosticReport}>
+            {diagnosticLoading ? "Preparing report…" : "Download diagnostic report"}
+          </button>
+        </section>
       {/if}
       {#if status.primary_state === "AUTH_REQUIRED"}
         <section class="identity-section" aria-label="Reconnect to GitHub">
