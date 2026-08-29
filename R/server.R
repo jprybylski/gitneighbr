@@ -97,6 +97,7 @@
   session_state$pending_tags <- character()
   session_state$pushed_tags <- character()
   session_state$mutation_lock <- FALSE
+  session_state$github_token <- NULL
 
   # DNS-rebinding mitigation (spec Sec 12.1): a request whose `Host` header
   # doesn't name this exact loopback authority is rejected outright, before
@@ -876,6 +877,177 @@
         sha = result$sha,
         pushed_count = result$pushed_count
       ), status_version = payload$version)
+    }) |>
+    plumber2::api_get("/api/v1/policy", function(request) {
+      validate_host(request)
+      require_auth(request)
+      policy <- .read_repo_policy(repo_root)
+      list(ok = TRUE, data = policy, error = NULL)
+    }) |>
+    plumber2::api_get("/api/v1/github/status", function(request) {
+      validate_host(request)
+      require_auth(request)
+      policy <- .read_repo_policy(repo_root)
+      gh_status <- .github_api_status(repo_root, git_bin, session_state = session_state, policy = policy)
+      list(ok = TRUE, data = gh_status, error = NULL)
+    }) |>
+    plumber2::api_post("/api/v1/github/connect", function(request, response) {
+      validate_host(request)
+      require_auth(request)
+      validate_origin(request)
+      body <- parse_body(request)
+      if (is.null(body) || is.null(body$token) || !nzchar(trimws(as.character(body$token)[[1]]))) {
+        return(.error_envelope("INVALID_SUMMARY", "A GitHub token is required.", recoverable = TRUE))
+      }
+      token_val <- trimws(as.character(body$token)[[1]])
+      policy <- .read_repo_policy(repo_root)
+      api_base <- .github_api_base(policy = policy)
+      user <- .github_get_user(token_val, api_base = api_base)
+      if (is.null(user)) {
+        return(.error_envelope("AUTH_REQUIRED", "GitHub could not verify the provided token.", recoverable = TRUE))
+      }
+      session_state$github_token <- token_val
+      payload <- .status_payload(repo_root, git_bin, session_state)
+      .ok_envelope(list(connected = TRUE, user = user), status_version = payload$version)
+    }) |>
+    plumber2::api_post("/api/v1/github/disconnect", function(request, response) {
+      validate_host(request)
+      require_auth(request)
+      validate_origin(request)
+      session_state$github_token <- NULL
+      payload <- .status_payload(repo_root, git_bin, session_state)
+      .ok_envelope(list(connected = FALSE), status_version = payload$version)
+    }) |>
+    plumber2::api_post("/api/v1/pull-request", function(request, response) {
+      validate_host(request)
+      require_auth(request)
+      validate_origin(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
+      body <- parse_body(request)
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
+
+      policy <- .read_repo_policy(repo_root)
+      result <- .git_create_pull_request(
+        repo_root = repo_root,
+        git_bin = git_bin,
+        target_branch = body$target_branch,
+        pr_branch = body$pr_branch,
+        title = body$title,
+        body = body$body,
+        session_state = session_state,
+        policy = policy
+      )
+      note_auth_result(result)
+      payload <- .status_payload(repo_root, git_bin, session_state)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced, diagnosis = result$diagnosis
+        ))
+      }
+      .ok_envelope(list(
+        pr_number = result$pr_number,
+        pr_url = result$pr_url,
+        pr_branch = result$pr_branch,
+        base_branch = result$base_branch,
+        title = result$title,
+        state = result$state
+      ), status_version = payload$version)
+    }) |>
+    plumber2::api_post("/api/v1/github/release", function(request, response) {
+      validate_host(request)
+      require_auth(request)
+      validate_origin(request)
+
+      if (!.git_available(git_bin)) {
+        return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+      }
+      not_a_repo <- require_existing_repo()
+      if (!is.null(not_a_repo)) {
+        return(not_a_repo)
+      }
+      body <- parse_body(request)
+      if (is.null(body)) {
+        return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+      }
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
+
+      operation_id <- acquire_mutation_lock(response)
+      if (is.null(operation_id)) {
+        response$status <- 423L
+        return(.error_envelope(
+          "OPERATION_IN_PROGRESS",
+          "Another repository action is already running. Wait for it to finish and try again."
+        ))
+      }
+      on.exit(release_mutation_lock(), add = TRUE)
+
+      policy <- .read_repo_policy(repo_root)
+      result <- .git_create_release(
+        repo_root = repo_root,
+        git_bin = git_bin,
+        tag_name = body$tag_name,
+        name = body$name,
+        body = body$body,
+        draft = isTRUE(body$draft),
+        prerelease = isTRUE(body$prerelease),
+        session_state = session_state,
+        policy = policy
+      )
+      note_auth_result(result)
+      payload <- .status_payload(repo_root, git_bin, session_state)
+      if (!isTRUE(result$ok)) {
+        return(.error_envelope(
+          result$code, result$message,
+          recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+          advanced = result$advanced, diagnosis = result$diagnosis
+        ))
+      }
+      .ok_envelope(list(
+        release_id = result$release_id,
+        tag_name = result$tag_name,
+        name = result$name,
+        html_url = result$html_url,
+        draft = result$draft,
+        prerelease = result$prerelease
+      ), status_version = payload$version)
+    }) |>
+    plumber2::api_get("/api/v1/github/releases", function(request) {
+      validate_host(request)
+      require_auth(request)
+      policy <- .read_repo_policy(repo_root)
+      res <- .git_list_releases(repo_root, git_bin, session_state = session_state, policy = policy)
+      if (!isTRUE(res$ok)) {
+        return(.error_envelope(res$code %||% "GITHUB_API_ERROR", res$message %||% "Failed to list releases."))
+      }
+      list(ok = TRUE, data = list(releases = res$releases), error = NULL)
     })
 }
 

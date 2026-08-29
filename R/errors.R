@@ -46,7 +46,15 @@
   REMOTE_NOT_FOUND = "Repository not found",
   NOTHING_TO_PUBLISH = "Nothing to publish yet",
   ALREADY_PUBLISHED = "Already connected to GitHub",
-  REMOTE_ALREADY_SET = "Already connected elsewhere"
+  REMOTE_ALREADY_SET = "Already connected elsewhere",
+  GITHUB_AUTH_REQUIRED = "GitHub access needed",
+  GITHUB_API_ERROR = "GitHub API error",
+  PR_CREATION_FAILED = "Couldn't open pull request",
+  INVALID_BRANCH_NAME = "Invalid branch name",
+  BRANCH_EXISTS = "Branch already exists",
+  TAG_NOT_FOUND = "Version label not found",
+  RELEASE_CREATION_FAILED = "Couldn't create release",
+  POLICY_VIOLATION = "Blocked by repository policy"
 )
 
 #' Look up the stable title for an application error code

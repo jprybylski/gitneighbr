@@ -166,3 +166,20 @@ fixture_missing_identity <- function() {
   .e2e_run_as(dir, "Seed", "seed@example.com", "commit", "-q", "-m", "initial commit")
   list(dir = dir)
 }
+
+# Repository with .gitneighbr.json policy enforcing PRs and disallowing untracked trash
+fixture_with_policy <- function() {
+  fx <- fixture_clean_with_remote()
+  policy_conf <- list(
+    require_pull_request = TRUE,
+    protected_branches = c("main"),
+    disallow_untracked_trash = TRUE,
+    pr_branch_prefix = "feature/"
+  )
+  writeLines(jsonlite::toJSON(policy_conf, auto_unbox = TRUE), file.path(fx$dir, ".gitneighbr.json"))
+  .e2e_run(fx$dir, "add", ".gitneighbr.json")
+  .e2e_run(fx$dir, "commit", "-q", "-m", "add repo policy")
+  # Add an untracked file to test trash prevention
+  writeLines("temporary", file.path(fx$dir, "untracked.tmp"))
+  fx
+}

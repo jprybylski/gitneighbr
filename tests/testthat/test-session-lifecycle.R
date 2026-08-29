@@ -488,3 +488,57 @@ test_that("POST /api/v1/publish connects a local-only repository to GitHub and p
     httr2::resp_body_json()
   expect_equal(status$data$primary_state, "READY")
 })
+
+test_that("GET /api/v1/policy and GET /api/v1/github/status return structured data over HTTP", {
+  skip_on_cran()
+  skip_if_not_installed("httr2")
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  dir <- withr::local_tempdir()
+  run <- function(...) processx::run(git, c("-C", dir, ...), error_on_status = TRUE)
+  run("init", "-q", "-b", "main")
+  run("config", "user.email", "test@example.com")
+  run("config", "user.name", "Test")
+  writeLines("hello", file.path(dir, "hello.txt"))
+  run("add", "hello.txt")
+  run("commit", "-q", "-m", "initial commit")
+
+  # Add policy file
+  policy_conf <- list(require_pull_request = TRUE, protected_branches = c("main", "prod"))
+  writeLines(jsonlite::toJSON(policy_conf, auto_unbox = TRUE), file.path(dir, ".gitneighbr.json"))
+
+  session <- open_repo(path = dir, browse = FALSE)
+  withr::defer(session$stop())
+
+  full_url <- session$url(redact = FALSE)
+  token <- sub(".*token=", "", full_url)
+  base_url <- sub("#.*", "", full_url)
+
+  # Test /api/v1/policy
+  policy_resp <- httr2::request(paste0(base_url, "api/v1/policy")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_true(policy_resp$ok)
+  expect_true(policy_resp$data$has_policy_file)
+  expect_true(policy_resp$data$require_pull_request)
+  expect_equal(unlist(policy_resp$data$protected_branches), c("main", "prod"))
+
+  # Test /api/v1/github/status
+  gh_resp <- httr2::request(paste0(base_url, "api/v1/github/status")) |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_true(gh_resp$ok)
+  expect_false(gh_resp$data$is_github)
+
+  # Test /api/v1/github/disconnect
+  disc_resp <- httr2::request(paste0(base_url, "api/v1/github/disconnect")) |>
+    httr2::req_method("POST") |>
+    httr2::req_auth_bearer_token(token) |>
+    httr2::req_perform() |>
+    httr2::resp_body_json()
+  expect_true(disc_resp$ok)
+  expect_false(disc_resp$data$connected)
+})

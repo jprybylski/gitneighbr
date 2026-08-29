@@ -196,6 +196,13 @@
     add("LOCAL_ONLY_TAG", "A tag exists locally but has not been sent to GitHub yet.")
   }
 
+  policy <- .read_repo_policy(repo_root)
+  if (isTRUE(policy$has_policy_file) && !isTRUE(policy$valid)) {
+    add("POLICY_INVALID", policy$error %||% "Repository policy configuration contains errors.")
+  } else if (isTRUE(policy$require_pull_request) || .is_branch_protected(status$branch, policy)) {
+    add("POLICY_PR_REQUIRED", "Changes to this branch must be sent via Pull Request.")
+  }
+
   notices
 }
 
@@ -235,6 +242,21 @@
   }
   state <- .primary_state(status, git_ok, auth_required = isTRUE(session_state$auth_required))
 
+  policy <- .read_repo_policy(repo_root)
+  github_info <- .github_api_status(repo_root, git_bin, session_state = session_state, policy = policy)
+  is_protected <- .is_branch_protected(status$branch, policy = policy, github_protected = github_info$branch_protected)
+
+  capabilities <- list(
+    can_commit = (status$unstaged_count %||% 0L) > 0L || (status$staged_count %||% 0L) > 0L || (status$untracked_count %||% 0L) > 0L,
+    can_push = (status$ahead %||% 0L) > 0L && !is_protected && !isTRUE(policy$require_pull_request),
+    can_update = (status$behind %||% 0L) > 0L && (status$unstaged_count %||% 0L) == 0L && (status$untracked_count %||% 0L) == 0L,
+    can_tag = !isTRUE(status$detached) && !isTRUE(status$unborn),
+    can_pull_request = isTRUE(github_info$is_github) && (status$ahead %||% 0L) > 0L,
+    can_release = isTRUE(github_info$is_github),
+    requires_pull_request = is_protected || isTRUE(policy$require_pull_request),
+    disallow_untracked_trash = isTRUE(policy$disallow_untracked_trash)
+  )
+
   data <- list(
     repository = list(root_display = fs::path_file(repo_root)),
     primary_state = state,
@@ -246,7 +268,10 @@
     unstaged_count = status$unstaged_count %||% 0L,
     untracked_count = status$untracked_count %||% 0L,
     conflicted_count = status$conflicted_count %||% 0L,
-    notices = notices
+    notices = notices,
+    policy = policy,
+    github = github_info,
+    capabilities = capabilities
   )
 
   if (!identical(data, session_state$last_snapshot)) {

@@ -17,7 +17,9 @@ Roxygen: list(markdown = TRUE)
 Depends:
     R (>= 4.2)
 Imports:
+    curl,
     fs,
+    jsonlite,
     openssl,
     plumber2 (>= 0.2.0),
     processx,

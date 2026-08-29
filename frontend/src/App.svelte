@@ -4,6 +4,54 @@
 
   type Notice = { code: string; message: string };
 
+  type PolicyData = {
+    has_policy_file: boolean;
+    policy_file_path: string | null;
+    valid: boolean;
+    error: string | null;
+    require_pull_request: boolean;
+    protected_branches: string[];
+    default_tag_prefix: string;
+    require_version_tags: boolean;
+    disallow_untracked_trash: boolean;
+    pr_branch_prefix: string;
+    github_host?: string | null;
+    github_api_url?: string | null;
+  };
+
+  type GitHubUser = {
+    login: string;
+    name: string | null;
+    avatar_url: string | null;
+    html_url: string | null;
+  };
+
+  type GitHubStatus = {
+    is_github: boolean;
+    is_enterprise: boolean;
+    host: string | null;
+    api_base: string | null;
+    owner: string | null;
+    repo: string | null;
+    remote_url: string | null;
+    connected: boolean;
+    token_source: "session" | "env" | "gh_cli" | null;
+    user: GitHubUser | null;
+    branch_protected: boolean;
+    gh_cli_available: boolean;
+  };
+
+  type Capabilities = {
+    can_commit: boolean;
+    can_push: boolean;
+    can_update: boolean;
+    can_tag: boolean;
+    can_pull_request: boolean;
+    can_release: boolean;
+    requires_pull_request: boolean;
+    disallow_untracked_trash: boolean;
+  };
+
   type StatusData = {
     repository: { root_display: string };
     primary_state: string;
@@ -16,6 +64,27 @@
     untracked_count: number;
     conflicted_count: number;
     notices: Notice[];
+    policy?: PolicyData;
+    github?: GitHubStatus;
+    capabilities?: Capabilities;
+  };
+
+  type PullRequestResult = {
+    pr_number: number;
+    pr_url: string;
+    pr_branch: string;
+    base_branch: string;
+    title: string;
+    state: string;
+  };
+
+  type ReleaseResult = {
+    release_id: number;
+    tag_name: string;
+    name: string;
+    html_url: string;
+    draft: boolean;
+    prerelease: boolean;
   };
 
   type ChangeState = "NEW" | "CHANGED" | "RENAMED" | "DELETED" | "CONFLICTED";
@@ -263,6 +332,135 @@
   // needed until someone actually wants to hand the report to someone else.
   let diagnosticLoading = $state(false);
   let diagnosticError = $state<ApiError | null>(null);
+
+  // Phase 3 Collaboration state (issues #22, #23, #24, #25):
+  let showGitHubModal = $state(false);
+  let githubToken = $state("");
+  let connectingGitHub = $state(false);
+  let githubConnectError = $state<ApiError | null>(null);
+
+  let showPRModal = $state(false);
+  let prBranch = $state("");
+  let prTitle = $state("");
+  let prBody = $state("");
+  let creatingPR = $state(false);
+  let prError = $state<ApiError | null>(null);
+  let prResult = $state<PullRequestResult | null>(null);
+
+  let showReleaseModal = $state(false);
+  let releaseTag = $state("");
+  let releaseTitle = $state("");
+  let releaseBody = $state("");
+  let releaseDraft = $state(false);
+  let releasePrerelease = $state(false);
+  let creatingRelease = $state(false);
+  let releaseError = $state<ApiError | null>(null);
+  let releaseResult = $state<ReleaseResult | null>(null);
+
+  async function connectGitHub() {
+    if (!githubToken.trim()) return;
+    connectingGitHub = true;
+    githubConnectError = null;
+    try {
+      const res = await postApi<{ connected: boolean; user: GitHubUser }>("/api/v1/github/connect", {
+        token: githubToken.trim(),
+      });
+      if (!res.ok) {
+        githubConnectError = res.error ?? { message: "Failed to connect GitHub account." };
+      } else {
+        githubToken = "";
+        showGitHubModal = false;
+        await loadStatus();
+      }
+    } catch (err) {
+      githubConnectError = describeFetchError(err);
+    } finally {
+      connectingGitHub = false;
+    }
+  }
+
+  async function disconnectGitHub() {
+    try {
+      await postApi("/api/v1/github/disconnect", {});
+      await loadStatus();
+    } catch {
+      // best-effort
+    }
+  }
+
+  function openPRModal() {
+    const target = status?.branch || "main";
+    const prefix = status?.policy?.pr_branch_prefix || "update/";
+    const now = new Date();
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    prBranch = `${prefix}${ts}`;
+    prTitle = summary.trim() || `Updates for ${target}`;
+    prBody = details.trim() || "";
+    prError = null;
+    showPRModal = true;
+  }
+
+  async function createPullRequest() {
+    creatingPR = true;
+    prError = null;
+    try {
+      const res = await postApi<PullRequestResult>("/api/v1/pull-request", {
+        target_branch: status?.branch || "main",
+        pr_branch: prBranch.trim(),
+        title: prTitle.trim(),
+        body: prBody.trim(),
+      });
+      if (!res.ok) {
+        prError = res.error ?? { message: "Failed to create pull request." };
+      } else {
+        prResult = res.data;
+        showPRModal = false;
+        await loadStatus();
+        await focusRegion("pr-result");
+      }
+    } catch (err) {
+      prError = describeFetchError(err);
+    } finally {
+      creatingPR = false;
+    }
+  }
+
+  function openReleaseModal(tag?: string) {
+    releaseTag = tag || taggedName || "";
+    releaseTitle = releaseTag;
+    releaseBody = tagAnnotation.trim() || "";
+    releaseDraft = false;
+    releasePrerelease = false;
+    releaseError = null;
+    showReleaseModal = true;
+  }
+
+  async function createRelease() {
+    creatingRelease = true;
+    releaseError = null;
+    try {
+      const res = await postApi<ReleaseResult>("/api/v1/github/release", {
+        tag_name: releaseTag.trim(),
+        name: releaseTitle.trim() || releaseTag.trim(),
+        body: releaseBody.trim(),
+        draft: releaseDraft,
+        prerelease: releasePrerelease,
+      });
+      if (!res.ok) {
+        releaseError = res.error ?? { message: "Failed to create release." };
+      } else {
+        releaseResult = res.data;
+        showReleaseModal = false;
+        await loadStatus();
+        await focusRegion("release-result");
+      }
+    } catch (err) {
+      releaseError = describeFetchError(err);
+    } finally {
+      creatingRelease = false;
+    }
+  }
 
   const summaryLength = $derived(summary.trim().length);
   const summaryValid = $derived(summaryLength >= 3 && summaryLength <= 72);
@@ -1017,14 +1215,32 @@
       <h1>gitneighbr</h1>
       <p class="tagline">Be a good neighbor to your repository.</p>
     </div>
-    <button
-      type="button"
-      class="theme-toggle"
-      onclick={cycleTheme}
-      aria-label={`Color theme: ${THEME_LABEL[theme]}. Click to change.`}
-    >
-      {THEME_LABEL[theme]}
-    </button>
+    <div class="header-actions">
+      {#if status?.github?.connected && status?.github?.user}
+        <div class="github-chip" role="status">
+          <span class="gh-avatar" aria-hidden="true">{status.github.is_enterprise ? "GHE" : "GH"}</span>
+          <span>@{status.github.user.login}{status.github.is_enterprise && status.github.host ? ` (${status.github.host})` : ""}</span>
+          <button type="button" class="chip-disconnect" onclick={disconnectGitHub} title="Disconnect GitHub API">✕</button>
+        </div>
+      {:else if status?.github?.is_github}
+        <button
+          type="button"
+          class="theme-toggle gh-connect-btn"
+          onclick={() => { showGitHubModal = true; }}
+          aria-label="Connect GitHub account"
+        >
+          {status.github.is_enterprise ? "Connect GHE" : "Connect GitHub"}
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="theme-toggle"
+        onclick={cycleTheme}
+        aria-label={`Color theme: ${THEME_LABEL[theme]}. Click to change.`}
+      >
+        {THEME_LABEL[theme]}
+      </button>
+    </div>
   </div>
 
   {#if loading}
@@ -1038,6 +1254,16 @@
         <p class="branch">Branch: {status.branch}</p>
       {/if}
       <p class="state">{STATE_COPY[status.primary_state] ?? status.primary_state}</p>
+      {#if status.policy?.has_policy_file}
+        <div class="policy-indicator" role="note">
+          <span class="policy-badge">Policy</span>
+          {#if status.policy.valid}
+            {status.policy.require_pull_request ? "Pull requests required for protected branches" : "Repository policy active"} ({status.policy.policy_file_path})
+          {:else}
+            <span class="policy-error">{status.policy.error}</span>
+          {/if}
+        </div>
+      {/if}
       {#if status.primary_state === "NOT_REPOSITORY"}
         <section class="identity-section" aria-label="Set up this folder">
           <h3>Initialize a Git repository here</h3>
@@ -1223,13 +1449,32 @@
           </div>
         </div>
       {/if}
-      {#if canSendStandalone || (changes.length === 0 && (sendError || sendSuccess || canRetrySend))}
+      {#if canSendStandalone || (changes.length === 0 && (sendError || sendSuccess || canRetrySend || prResult))}
         <div class="update-section">
           {#if canSendStandalone}
-            <button type="button" class="update-button" disabled={sending} onclick={sendSavedSnapshots}>
-              {sending ? "Sending…" : "Send to GitHub"}
-            </button>
+            {#if status.capabilities?.requires_pull_request}
+              <button type="button" class="update-button pr-btn" disabled={creatingPR} onclick={openPRModal}>
+                {creatingPR ? "Creating PR…" : "Create Pull Request"}
+              </button>
+            {:else}
+              <button type="button" class="update-button" disabled={sending} onclick={sendSavedSnapshots}>
+                {sending ? "Sending…" : "Send to GitHub"}
+              </button>
+              {#if status.capabilities?.can_pull_request}
+                <button type="button" class="secondary-button" disabled={creatingPR} onclick={openPRModal}>
+                  Create Pull Request
+                </button>
+              {/if}
+            {/if}
           {/if}
+          <div id="pr-result" tabindex="-1">
+            {#if prResult}
+              <div class="card success pr-success-card" role="status">
+                <p>Pull request #{prResult.pr_number} opened: <strong>{prResult.title}</strong></p>
+                <p><a href={prResult.pr_url} target="_blank" rel="noopener noreferrer">View Pull Request #{prResult.pr_number} on GitHub &rarr;</a></p>
+              </div>
+            {/if}
+          </div>
           <div id="send-result" tabindex="-1">
             {#if sendError}
               {@render errorCard(sendError)}
@@ -1287,7 +1532,8 @@
                   <button
                     type="button"
                     class="row-action-button danger"
-                    disabled={rowBusyPath === change.path}
+                    disabled={rowBusyPath === change.path || Boolean(status?.capabilities?.disallow_untracked_trash)}
+                    title={status?.capabilities?.disallow_untracked_trash ? "Disabled by repository policy" : undefined}
                     aria-label={`Remove ${change.path}`}
                     onclick={() => trashFile(change.path)}
                   >
@@ -1459,6 +1705,13 @@
               {#if taggedName}
                 <p>Marked as version {taggedName}.</p>
               {/if}
+              {#if taggedName || (commitSuccess && status.capabilities?.can_release)}
+                <div class="release-action-row">
+                  <button type="button" class="secondary-button" onclick={() => openReleaseModal(taggedName || undefined)}>
+                    Create GitHub Release
+                  </button>
+                </div>
+              {/if}
               {#if sending}
                 <p>Checking GitHub for updates and sending&hellip;</p>
               {:else if sendSuccess}
@@ -1473,6 +1726,14 @@
                 <p class="partial-failure">Not yet sent to GitHub: {sendError.message}</p>
                 {#if sendError.advanced}{@render advancedDetails(sendError.advanced)}{/if}
               {/if}
+            </div>
+          {/if}
+        </div>
+        <div id="release-result" tabindex="-1">
+          {#if releaseResult}
+            <div class="card success pr-success-card" role="status">
+              <p>Release <strong>{releaseResult.name}</strong> published on GitHub!</p>
+              <p><a href={releaseResult.html_url} target="_blank" rel="noopener noreferrer">View Release on GitHub &rarr;</a></p>
             </div>
           {/if}
         </div>
@@ -1494,6 +1755,163 @@
         {/if}
       </section>
     {/if}
+  {/if}
+
+  {#if showGitHubModal}
+    <div class="modal-backdrop" onclick={() => { showGitHubModal = false; }} role="presentation">
+      <div
+        class="modal"
+        role="dialog"
+        tabindex="-1"
+        aria-modal="true"
+        aria-labelledby="gh-modal-title"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => { if (e.key === "Escape") showGitHubModal = false; }}
+      >
+        <div class="modal-header">
+          <h2 id="gh-modal-title">Connect GitHub Account</h2>
+          <button type="button" class="close-btn" onclick={() => { showGitHubModal = false; }} aria-label="Close dialog">✕</button>
+        </div>
+        <p class="modal-desc">
+          Enter a Personal Access Token (with <code>repo</code> scope) for {status?.github?.host || "GitHub"} to enable Pull Requests and Releases.
+        </p>
+        {#if githubConnectError}
+          {@render errorCard(githubConnectError)}
+        {/if}
+        <label class="field" for="gh-token-input">GitHub Token</label>
+        <input
+          id="gh-token-input"
+          type="password"
+          bind:value={githubToken}
+          placeholder="ghp_..."
+          disabled={connectingGitHub}
+        />
+        <div class="modal-actions">
+          <button type="button" class="secondary-button" onclick={() => { showGitHubModal = false; }}>Cancel</button>
+          <button type="button" class="update-button" disabled={connectingGitHub || !githubToken.trim()} onclick={connectGitHub}>
+            {connectingGitHub ? "Connecting…" : "Connect"}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showPRModal}
+    <div class="modal-backdrop" onclick={() => { showPRModal = false; }} role="presentation">
+      <div
+        class="modal"
+        role="dialog"
+        tabindex="-1"
+        aria-modal="true"
+        aria-labelledby="pr-modal-title"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => { if (e.key === "Escape") showPRModal = false; }}
+      >
+        <div class="modal-header">
+          <h2 id="pr-modal-title">Create Pull Request</h2>
+          <button type="button" class="close-btn" onclick={() => { showPRModal = false; }} aria-label="Close dialog">✕</button>
+        </div>
+        <p class="modal-desc">
+          Push a new feature branch to GitHub and open a pull request into <strong>{status?.branch || "main"}</strong>.
+        </p>
+        {#if prError}
+          {@render errorCard(prError)}
+        {/if}
+        <label class="field" for="pr-branch-input">Branch Name <span class="required">(required)</span></label>
+        <input
+          id="pr-branch-input"
+          type="text"
+          bind:value={prBranch}
+          placeholder="update/my-feature"
+          disabled={creatingPR}
+        />
+        <label class="field" for="pr-title-input">Pull Request Title <span class="required">(required)</span></label>
+        <input
+          id="pr-title-input"
+          type="text"
+          bind:value={prTitle}
+          placeholder="Summary of changes"
+          disabled={creatingPR}
+        />
+        <label class="field" for="pr-body-input">Description <span class="optional">(optional)</span></label>
+        <textarea
+          id="pr-body-input"
+          rows="3"
+          bind:value={prBody}
+          placeholder="Explain what was changed and why"
+          disabled={creatingPR}
+        ></textarea>
+        <div class="modal-actions">
+          <button type="button" class="secondary-button" onclick={() => { showPRModal = false; }}>Cancel</button>
+          <button type="button" class="update-button pr-btn" disabled={creatingPR || !prBranch.trim() || !prTitle.trim()} onclick={createPullRequest}>
+            {creatingPR ? "Creating PR…" : "Create Pull Request"}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showReleaseModal}
+    <div class="modal-backdrop" onclick={() => { showReleaseModal = false; }} role="presentation">
+      <div
+        class="modal"
+        role="dialog"
+        tabindex="-1"
+        aria-modal="true"
+        aria-labelledby="release-modal-title"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => { if (e.key === "Escape") showReleaseModal = false; }}
+      >
+        <div class="modal-header">
+          <h2 id="release-modal-title">Create GitHub Release</h2>
+          <button type="button" class="close-btn" onclick={() => { showReleaseModal = false; }} aria-label="Close dialog">✕</button>
+        </div>
+        <p class="modal-desc">
+          Publish a GitHub Release from version tag <strong>{releaseTag}</strong>.
+        </p>
+        {#if releaseError}
+          {@render errorCard(releaseError)}
+        {/if}
+        <label class="field" for="release-tag-input">Tag Name <span class="required">(required)</span></label>
+        <input
+          id="release-tag-input"
+          type="text"
+          bind:value={releaseTag}
+          placeholder="v1.0.0"
+          disabled={creatingRelease}
+        />
+        <label class="field" for="release-title-input">Release Title <span class="optional">(optional)</span></label>
+        <input
+          id="release-title-input"
+          type="text"
+          bind:value={releaseTitle}
+          placeholder={releaseTag || "Release Title"}
+          disabled={creatingRelease}
+        />
+        <label class="field" for="release-body-input">Release Notes <span class="optional">(optional)</span></label>
+        <textarea
+          id="release-body-input"
+          rows="4"
+          bind:value={releaseBody}
+          placeholder="Describe the changes in this release"
+          disabled={creatingRelease}
+        ></textarea>
+        <div class="field-inline">
+          <input id="release-draft" type="checkbox" bind:checked={releaseDraft} disabled={creatingRelease} />
+          <label for="release-draft">Save as draft</label>
+        </div>
+        <div class="field-inline">
+          <input id="release-prerelease" type="checkbox" bind:checked={releasePrerelease} disabled={creatingRelease} />
+          <label for="release-prerelease">Set as pre-release</label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="secondary-button" onclick={() => { showReleaseModal = false; }}>Cancel</button>
+          <button type="button" class="update-button" disabled={creatingRelease || !releaseTag.trim()} onclick={createRelease}>
+            {creatingRelease ? "Publishing…" : "Publish Release"}
+          </button>
+        </div>
+      </div>
+    </div>
   {/if}
 </main>
 
@@ -2092,5 +2510,178 @@
   .save-button:disabled {
     cursor: default;
     opacity: 0.5;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .github-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 9999px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .gh-avatar {
+    font-size: 0.75rem;
+    font-weight: 700;
+    background: var(--accent);
+    color: white;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+  }
+  .chip-disconnect {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    padding: 0 0.2rem;
+    line-height: 1;
+  }
+  .chip-disconnect:hover {
+    color: var(--danger);
+  }
+  .gh-connect-btn {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .policy-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+  .policy-badge {
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .policy-error {
+    color: var(--danger);
+  }
+  .secondary-button {
+    font: inherit;
+    padding: 0.45rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .secondary-button:hover {
+    background: var(--surface-muted);
+  }
+  .secondary-button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+  .pr-btn {
+    background: var(--purple, #6f42c1);
+    color: white;
+    border-color: var(--purple, #6f42c1);
+  }
+  .pr-btn:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+  .pr-success-card {
+    margin-top: 0.75rem;
+  }
+  .release-action-row {
+    margin-top: 0.75rem;
+  }
+
+  /* Modal Backdrop and Box */
+  .modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+  }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0.6rem;
+    width: 100%;
+    max-width: 480px;
+    padding: 1.5rem;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    color: var(--text);
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+  }
+  .modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+  }
+  .close-btn {
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .close-btn:hover {
+    color: var(--text);
+  }
+  .modal-desc {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    margin-top: 0;
+    margin-bottom: 1rem;
+  }
+  .modal .field {
+    display: block;
+    font-weight: 600;
+    margin-top: 0.85rem;
+    margin-bottom: 0.35rem;
+    font-size: 0.9rem;
+  }
+  .modal input[type="text"],
+  .modal input[type="password"],
+  .modal textarea {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--input-border);
+    border-radius: 0.4rem;
+    background: var(--surface);
+    color: var(--text);
+  }
+  .modal textarea {
+    resize: vertical;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
   }
 </style>

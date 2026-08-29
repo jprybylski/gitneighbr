@@ -49,14 +49,11 @@ repo <- switch(fixture_name,
   "remote-ahead" = fixture_remote_ahead(),
   "diverged" = fixture_diverged(),
   "missing-identity" = fixture_missing_identity(),
+  "with-policy" = fixture_with_policy(),
   stop("unknown fixture: ", fixture_name, call. = FALSE)
 )
 
-if (requireNamespace("gitneighbr", quietly = TRUE)) {
-  library(gitneighbr)
-} else {
-  pkgload::load_all(.repo_root, quiet = TRUE)
-}
+pkgload::load_all(.repo_root, quiet = TRUE)
 
 session <- gitneighbr::open_repo(path = repo$dir, browse = FALSE, port = 0L)
 
