@@ -1,0 +1,123 @@
+---
+title: "The gitneighbr Safety and Security Model"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{The gitneighbr Safety and Security Model}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## The "Good Neighbor" Philosophy
+
+Git is an essential tool for collaborative software development, data science, and reproducible research. However, its expansive command-line surface can be intimidating, and destructive commands can easily lead to lost work.
+
+`gitneighbr` was created under the principle:
+
+> **"Be a good neighbor to your repository."**
+
+Being a good neighbor means:
+1. **Never damaging the repository or working tree**: `gitneighbr` never runs destructive commands like `git reset --hard`, `git push --force`, or `git clean -fdx`.
+2. **Safe refusal over opaque recovery**: If repository state is ambiguous, diverged, or conflicted, `gitneighbr` refuses automated resolution. Instead, it explains the state in plain language and provides an exportable diagnostic report for Git experts.
+3. **Respecting the user's environment**: `gitneighbr` respects existing Git hooks, signing keys, SSH agents, credential helpers, and repository configurations by delegating directly to the system `git` binary.
+
+---
+
+## Authoritative System Git Integration
+
+Rather than reimplementing Git in R or using an embedded library that might bypass existing authentication, `gitneighbr` uses the system `git` executable:
+
+- **Argument arrays via `processx`**: All Git commands are executed as explicit argument vectors (`argv`), completely avoiding shell strings and preventing shell injection vulnerabilities.
+- **Credential and SSH preservation**: Existing SSH keys, Git credential managers (e.g. GCM, macOS Keychain), and gpg-agent signing work seamlessly.
+- **Hook enforcement**: Pre-commit and pre-push hooks are executed normally. If a hook fails, `gitneighbr` surfaces the exact output without leaving the repository in a corrupted state.
+
+---
+
+## Local Server Security Architecture
+
+`gitneighbr` starts a lightweight local HTTP server powered by `plumber2`. The server incorporates multi-layered defense-in-depth security:
+
+```
+[Browser Client]
+       │
+       ▼ (http://127.0.0.1:<port>/#token=<token>)
+┌─────────────────────────────────────────────────────────────┐
+│ gitneighbr local server (plumber2)                         │
+│                                                             │
+│  [1] Loopback binding (127.0.0.1 only)                      │
+│  [2] Host header check (blocks DNS rebinding)              │
+│  [3] Bearer token validation (per-session entropy)          │
+│  [4] Origin header validation on mutations                  │
+│  [5] Single-mutation mutex lock                             │
+│  [6] Strict repository confinement & path sanitization      │
+└─────────────────────────────────────────────────────────────┘
+       │
+       ▼ (argv vector execution via processx)
+  [Authoritative System Git]
+```
+
+### 1. Loopback-Only Binding
+The server binds exclusively to `127.0.0.1` and refuses external interfaces (`0.0.0.0`).
+
+### 2. DNS Rebinding and Host Header Validation
+Every incoming HTTP request is checked against an allowed Host whitelist (`127.0.0.1`, `localhost`). Requests with external or forged Host headers are rejected with `400 Bad Request`.
+
+### 3. Session Bearer Token
+Upon startup, `open_repo()` generates a cryptographically secure random bearer token (`openssl::rand_bytes(24)`).
+- The token is passed to the browser via the URL hash fragment (`#token=...`), which is never sent across HTTP request lines or stored in web server access logs.
+- The single-page app extracts the token from `location.hash` and passes it in the `Authorization: Bearer <token>` header for all API requests.
+- Unauthorized requests receive `401 Unauthorized`.
+
+### 4. Origin Header Validation
+All state-modifying requests (`POST`, `DELETE`, etc.) validate that the `Origin` or `Referer` header matches the local loopback origin, blocking Cross-Site Request Forgery (CSRF).
+
+### 5. Single-Mutation Lock
+Git operations within a working directory must not race with each other. `gitneighbr` enforces a process-level mutex lock across all mutating endpoints (commit, push, pull, restore, trash, ignore). If a mutation is already in progress, concurrent requests are rejected cleanly.
+
+### 6. Repository Confinement and Traversal Prevention
+File-targeting endpoints (diff, restore, trash, ignore) strictly normalize target paths and verify that they resolve within the configured repository root:
+- Attempts to pass absolute paths or traverse parent directories (`../`) are rejected with `400 / 403`.
+- The `.git` metadata directory is strictly protected from modification.
+
+---
+
+## Data Protection Guarantees
+
+### Safe Single-File Restore
+Restoring a modified tracked file reverts only that specific file to the `HEAD` snapshot. Before execution, the UI prompts with an explicit confirmation modal detailing the file path and explaining that unsaved changes in that file will be discarded.
+
+### Trash-Based File Removal (No `git clean`)
+When a user chooses to delete an untracked file, `gitneighbr` moves the file to the operating system's native Trash / Recycle Bin:
+- macOS: `osascript` AppleScript Trash API
+- Linux: `gio trash` (freedesktop.org trash specification)
+- Windows: PowerShell `Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile` with `SendToRecycleBin`
+
+This guarantees that discarded untracked files can be recovered by the user if deleted by mistake.
+
+### Partial Commit Integrity
+When committing selected files while other files have unstaged or pre-staged changes:
+1. `gitneighbr` stages only the explicitly checked files.
+2. It executes the commit.
+3. Any deselected files or pre-existing working tree edits remain intact and unmodified.
+
+---
+
+## Divergence and Diagnostic Handoff
+
+When a repository enters a state requiring human judgment (such as divergent local and remote branches, or unresolved rebase/merge conflicts):
+- `gitneighbr` halts linear actions.
+- The UI presents a diagnostic explanation card describing why automatic pushing or pulling is paused.
+- The user can click **Download diagnostic report** to generate a sanitized markdown summary including:
+  - Repository branch status and ahead/behind counts
+  - Recent commit history (`git log -n 10`)
+  - Reflog snippet
+  - Configured remotes (with sensitive credentials stripped)
+  - System Git version and operating system information
+
+This report can be attached directly to an issue or sent to a Git administrator for guided resolution.

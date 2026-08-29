@@ -6,6 +6,10 @@
 #' when run from one) and launches the browser.
 #'
 #' @return Invisibly, the `gitneighbr_session` from [open_repo()].
+#' @examples
+#' \dontrun{
+#' gitneighbr_addin()
+#' }
 #' @export
 gitneighbr_addin <- function() {
   invisible(open_repo())

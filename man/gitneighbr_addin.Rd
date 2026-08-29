@@ -15,3 +15,8 @@ Equivalent to calling \code{\link[=open_repo]{open_repo()}} with its defaults, w
 app for the current working directory (an RStudio project's directory,
 when run from one) and launches the browser.
 }
+\examples{
+\dontrun{
+gitneighbr_addin()
+}
+}

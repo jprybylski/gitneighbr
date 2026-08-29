@@ -44,3 +44,9 @@ or clone an existing GitHub repository into it (spec Sec 22, 0.2.0). A
 bare repository (no working tree) is still refused outright, since there
 is no in-app story for one.
 }
+\examples{
+\dontrun{
+session <- open_repo()
+session$stop()
+}
+}

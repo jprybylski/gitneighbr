@@ -147,6 +147,9 @@
 #'   `gitneighbr_doctor_check` objects (`id`, `status` — one of `"ok"`,
 #'   `"fail"`, `"advisory"`, `"skipped"` — `message`, and an optional
 #'   `detail` list). Printed automatically; print again with `print()`.
+#' @examples
+#' report <- doctor()
+#' report$ok
 #' @export
 doctor <- function(path = ".", git = getOption("gitneighbr.git", unname(Sys.which("git")))) {
   git <- unname(git)

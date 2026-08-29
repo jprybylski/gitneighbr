@@ -26,3 +26,7 @@ detection (including distinguishing a bare repository from no repository
 at all), upstream configuration, whether the remote looks like GitHub,
 credential-helper presence, and active commit hooks.
 }
+\examples{
+report <- doctor()
+report$ok
+}

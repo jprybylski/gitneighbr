@@ -1,0 +1,141 @@
+---
+title: "Getting Started with gitneighbr"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with gitneighbr}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## What is gitneighbr?
+
+> **"Be a good neighbor to your repository."**
+
+`gitneighbr` is a local, browser-based R package and application designed to help people who are unfamiliar with Git understand, save, and publish changes in a Git repository — while staying a fast, scriptable convenience tool for experienced users too.
+
+It deliberately exposes a small, safe subset of Git and refuses to automate anything that requires human judgment (such as diverged histories or merge conflicts).
+
+---
+
+## Launching gitneighbr
+
+### From the R Console
+
+To launch `gitneighbr` for the current working directory:
+
+```r
+library(gitneighbr)
+
+# Open repository in your default browser
+session <- open_repo()
+```
+
+The server process starts asynchronously in the background via `processx`, which means your R console is freed immediately.
+
+To launch for a specific repository path:
+
+```r
+session <- open_repo(path = "~/projects/my-analysis")
+```
+
+### From the RStudio / Positron Addins Menu
+
+If you are using RStudio or Positron, `gitneighbr` installs an add-in available under **Addins -> gitneighbr: Open Repository**. Triggering it opens the current project directory in the Viewer pane or your browser.
+
+---
+
+## Checking System Health with `doctor()`
+
+Before launching or when troubleshooting Git environment issues, you can run `doctor()`:
+
+```r
+doctor()
+```
+
+`doctor()` checks:
+- Whether Git is installed and available on your `PATH`
+- Whether your Git version meets the minimum requirement (>= 2.28)
+- Whether user identity (`user.name` and `user.email`) is configured
+- Whether credential helpers and SSH agents are configured
+- Whether the target directory is a valid Git repository
+
+---
+
+## Core Workflows
+
+### 1. Repository Status at a Glance
+
+When you open a repository, `gitneighbr` derives a clear primary state:
+- **Clean**: All saved changes are in sync with GitHub.
+- **Uncommitted Changes**: You have unsaved edits in your working directory.
+- **Local Commits Ahead**: You have saved snapshots ready to send to GitHub.
+- **Remote Updates Available**: Changes have been made on GitHub that you can safely fast-forward.
+- **Diverged or Conflicted**: Changes have been made both locally and remotely, or an unresolved merge conflict exists. In this case, `gitneighbr` safely explains the situation and provides an exportable diagnostic report rather than risking data loss.
+
+### 2. Reviewing Changes & Diff Viewer
+
+The changed files list groups files by status:
+- Modified files
+- Untracked / newly created files
+- Deleted files
+- Renamed or copied files
+
+Clicking on any file opens a unified diff viewer highlighting exact additions and deletions.
+
+### 3. Saving Snapshots (Commit)
+
+1. Select the files you want to include using checkboxes.
+2. Enter a clear snapshot summary message.
+3. Click **Save snapshot**.
+
+Only the selected files will be committed; any deselected or unstaged files remain untouched in your working directory.
+
+### 4. Sending Changes to GitHub (Push)
+
+Click **Send to GitHub** to push your local snapshots. `gitneighbr` automatically fetches first to verify that GitHub has not moved ahead, ensuring a clean, safe push.
+
+Alternatively, use the combined **Save and send** flow to commit your selected changes, optionally add a version label, and push to GitHub in one action.
+
+### 5. Getting Updates from GitHub (Fast-Forward Pull)
+
+When changes are available on GitHub and you have no conflicting local commits, click **Get updates from GitHub**. `gitneighbr` runs a fast-forward-only pull, preventing unexpected merge commits.
+
+### 6. Adding a Version Label (Annotated Tag)
+
+You can tag a milestone (e.g. `v0.1.0` or `1.0.0`):
+1. Enter the tag name and an optional message.
+2. `gitneighbr` creates an annotated Git tag and pushes it to GitHub.
+
+### 7. Restoring & Discarding Changes
+
+- **Restore a tracked file**: Reverts unsaved changes in a single tracked file back to the last saved snapshot (with explicit confirmation).
+- **Remove untracked files**: Moves unwanted untracked files to your operating system's Trash/Recycle Bin rather than permanently deleting them.
+- **Ignore paths (`.gitignore`)**: Suggests `.gitignore` patterns for unwanted files so they stop appearing in your changes list.
+
+### 8. Collaboration & Protected Branches
+
+For repositories with branch protection rules or team workflows:
+- Connect with an optional GitHub Personal Access Token (PAT).
+- Automatically create a dedicated branch and open a Pull Request on GitHub.
+- Create GitHub Releases directly from pushed version tags.
+
+---
+
+## Stopping Sessions
+
+Because `open_repo()` runs in a background process, you can stop it at any time:
+
+```r
+# Stop via session object
+session$stop()
+
+# Or stop by port if the R session was restarted
+stop_session(port = 52200)
+```

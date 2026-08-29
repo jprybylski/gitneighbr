@@ -4,52 +4,106 @@
 [![R-CMD-check](https://github.com/jprybylski/gitneighbr/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/jprybylski/gitneighbr/actions/workflows/R-CMD-check.yaml)
 <!-- badges: end -->
 
-> Be a good neighbor to your repository.
+> **Be a good neighbor to your repository.**
 
-`gitneighbr` is a local, browser-based tool that helps people who are
-unfamiliar with Git understand, save, and publish changes in an existing
-Git repository — while staying a fast, scriptable convenience tool for
-people who already know Git well. It exposes a small, safe subset of Git
-(status, commit, push, one annotated tag, single-file restore, `.gitignore`
-help) and never automates anything that needs human judgment.
+`gitneighbr` is a local, browser-based R package and application that helps people who are unfamiliar with Git understand, save, and publish changes in a Git repository — while staying a fast, scriptable convenience tool for experienced users too.
 
-## Status
+It deliberately exposes a small, safe subset of Git (status, commit, push, version tags, single-file restore, and `.gitignore` assistance) and refuses to automate anything requiring human judgment (such as diverged histories or merge conflicts).
 
-Early scaffold. A minimal vertical slice works end to end (launch, real
-repository status, browser UI); most of the product described in
-[`gitneighbor-package-specification.md`](./gitneighbor-package-specification.md)
-is not yet built — see [`CLAUDE.md`](./CLAUDE.md) for the roadmap and this
-repo's issues for the current task list.
+---
 
-## Installation (development)
+## Features
+
+- **Intuitive Repository Status**: Explains repository state in plain language before offering actions (Clean, Unsaved Changes, Local Snapshots Ahead, Remote Updates Available).
+- **Safe Snapshot Workflow**: Select individual files, write clear summary messages, and save commits without altering unselected work.
+- **Push & Pull Safeguards**: Fetch-first safe send to GitHub and fast-forward-only updates to avoid unexpected merge commits.
+- **Safe File Management**:
+  - Revert unsaved edits on a single tracked file with explicit confirmation.
+  - Remove untracked files by sending them to your operating system's Trash / Recycle Bin (never `git clean`).
+  - Add ignore rules to `.gitignore` with single-click rule suggestions.
+- **Version Tagging & Releases**: Create annotated semantic version tags and publish GitHub releases.
+- **Guided Onboarding**: Initialize a new Git repository or clone an existing GitHub repository from an empty folder.
+- **Diagnostic Export & Handoff**: Safely explains diverged branches or conflicts and exports sanitized diagnostic reports for Git experts.
+- **GitHub Collaboration**: Support for GitHub Personal Access Tokens (PAT), branch creation, and Pull Request generation for protected branches.
+- **RStudio / Positron Integration**: Built-in RStudio Addin to open the repository in the Viewer pane or default browser.
+- **Light & Dark Theme**: Supports Auto (system preference), Light, and Dark modes.
+- **Robust Security**: Bound strictly to `127.0.0.1`, protected by random session bearer tokens, Host header / DNS rebinding validation, Origin checks, and single-mutation mutex locking.
+
+---
+
+## Installation
+
+Install the development version from GitHub:
 
 ```r
 # install.packages("pak")
 pak::pak("jprybylski/gitneighbr")
 ```
 
+---
+
 ## Usage
 
+### Open the Application
+
 ```r
-gitneighbr::open_repo()
+library(gitneighbr)
+
+# Open current working directory in browser
+session <- open_repo()
+
+# Or specify a target directory
+session <- open_repo(path = "~/projects/my-analysis")
 ```
 
-Opens the app for the Git repository in your current working directory in
-your default browser. The server runs in the background; your R console is
-free immediately. Stop it with:
+The server process starts asynchronously in the background; your R console is freed immediately.
+
+### Checking Environment Health
 
 ```r
-session <- gitneighbr::open_repo()
+# Run diagnostic checks on Git executable, identity, and credentials
+doctor()
+```
+
+### Stopping the App
+
+```r
+# Stop via session object
 session$stop()
+
+# Or stop by port number
+stop_session(port = 52200)
 ```
 
-## Development
+---
+
+## Architecture & Development
+
+- **Backend**: Local [`plumber2`](https://plumber2.data-imaginist.com/) HTTP server running in an independent background process via `processx`.
+- **Git Authoritativeness**: Direct execution of the user's system `git` using argument arrays, preserving credential helpers, SSH keys, GPG signing, and hooks.
+- **Frontend**: Svelte 5 + TypeScript single-page application built with [bun](https://bun.sh). The precompiled production build ships committed in `inst/www/`, requiring no Node or build tools during package installation.
+
+### Running Tests
 
 ```r
-devtools::load_all()
+# Run R unit and integration tests (testthat)
 devtools::test()
+
+# Full CRAN package check
+devtools::check(args = c("--as-cran"))
 ```
 
-The frontend (`frontend/`, a Svelte + TypeScript app built with
-[bun](https://bun.sh)) is precompiled and committed to `inst/www/`; see
-[`CLAUDE.md`](./CLAUDE.md) for the rebuild command.
+### Rebuilding Frontend & Running E2E Tests
+
+```bash
+cd frontend
+bun install
+bun run build
+bun run test:e2e
+```
+
+---
+
+## License
+
+MIT © John Prybylski

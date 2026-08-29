@@ -19,3 +19,8 @@ stop by force (e.g. after the R session that started it was restarted).}
 \description{
 Stop a gitneighbr session
 }
+\examples{
+\dontrun{
+stop_session(port = 52200)
+}
+}

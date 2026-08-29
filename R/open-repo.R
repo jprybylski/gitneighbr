@@ -22,6 +22,11 @@
 #' @return A `gitneighbr_session` object, invisibly-printable and safe to
 #'   discard (the server keeps running; recover it later with
 #'   [stop_session()] using the port).
+#' @examples
+#' \dontrun{
+#' session <- open_repo()
+#' session$stop()
+#' }
 #' @export
 open_repo <- function(path = ".",
                        browse = interactive(),
@@ -100,6 +105,10 @@ open_repo <- function(path = ".",
 #' @param port If `session` is `NULL`, the port of a session to look up and
 #'   stop by force (e.g. after the R session that started it was restarted).
 #' @param host Host to look on when stopping by port.
+#' @examples
+#' \dontrun{
+#' stop_session(port = 52200)
+#' }
 #' @export
 stop_session <- function(session = NULL, port = NULL, host = "127.0.0.1") {
   if (!is.null(session) && !inherits(session, "gitneighbr_session") &&
