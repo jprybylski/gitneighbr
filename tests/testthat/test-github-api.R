@@ -1,4 +1,9 @@
 test_that(".parse_github_slug correctly parses various GitHub remote URLs", {
+  # GITHUB_API_URL is also a GitHub Actions built-in env var, always set on
+  # Actions runners -- unset both here so CI doesn't misdetect every host
+  # (even gitlab.com) as GitHub via `has_env_api`.
+  withr::local_envvar(c(GITHUB_API_URL = NA, GITHUB_ENTERPRISE_URL = NA))
+
   # HTTPS
   expect_equal(
     .parse_github_slug("https://github.com/jprybylski/gitneighbr.git"),
@@ -55,6 +60,10 @@ test_that(".parse_github_slug correctly parses various GitHub remote URLs", {
 })
 
 test_that(".github_api_base dynamically calculates base endpoint", {
+  # See the identical note above: GITHUB_API_URL is a GitHub Actions
+  # built-in env var, always set on Actions runners.
+  withr::local_envvar(c(GITHUB_API_URL = NA, GITHUB_ENTERPRISE_URL = NA))
+
   # Public GitHub
   gh_slug <- list(host = "github.com", is_enterprise = FALSE)
   expect_equal(.github_api_base(gh_slug), "https://api.github.com")
