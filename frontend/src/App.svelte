@@ -238,6 +238,15 @@
 
   let theme = $state<Theme>(loadTheme());
 
+  // Tracks the OS/browser's actual preference so "Auto" can show an icon for
+  // whichever mode it's currently resolving to, not a separate "auto" glyph.
+  let prefersDark = $state(
+    typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  const resolvedTheme = $derived<"light" | "dark">(
+    theme === "system" ? (prefersDark ? "dark" : "light") : theme,
+  );
+
   $effect(() => {
     if (theme === "system") {
       document.documentElement.removeAttribute("data-theme");
@@ -250,6 +259,14 @@
       // Storage unavailable (private browsing, restricted webview) - the
       // toggle still works for the rest of this session.
     }
+  });
+
+  $effect(() => {
+    if (typeof matchMedia !== "function") return;
+    const query = matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => { prefersDark = query.matches; };
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
   });
 
   function cycleTheme() {
@@ -1228,6 +1245,19 @@
   </details>
 {/snippet}
 
+{#snippet themeIcon(mode: "light" | "dark")}
+  {#if mode === "dark"}
+    <svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
+    </svg>
+  {:else}
+    <svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+    </svg>
+  {/if}
+{/snippet}
+
 {#snippet errorCard(err: ApiError)}
   <div class="card error" role="alert">
     {#if err.title}<p class="error-title">{err.title}</p>{/if}
@@ -1274,6 +1304,7 @@
         onclick={cycleTheme}
         aria-label={`Color theme: ${THEME_LABEL[theme]}. Click to change.`}
       >
+        {@render themeIcon(resolvedTheme)}
         {THEME_LABEL[theme]}
       </button>
     </div>
@@ -2112,6 +2143,9 @@
     color: var(--text-muted);
   }
   .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     flex-shrink: 0;
     font: inherit;
     font-size: 0.85rem;
@@ -2124,6 +2158,11 @@
   }
   .theme-toggle:hover {
     border-color: var(--accent);
+  }
+  .theme-icon {
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
   }
   .card {
     border: 1px solid var(--border);
