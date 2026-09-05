@@ -1,6 +1,6 @@
 Package: gitneighbr
 Title: Git Help, from a Friendly Neighbor
-Version: 0.0.0.9000
+Version: 0.1.0
 Authors@R:
     person("John", "Prybylski", , "jprybylski@gmail.com", role = c("aut", "cre"))
 Description: A local, browser-based application that helps people who are

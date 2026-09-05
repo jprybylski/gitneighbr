@@ -1,4 +1,4 @@
-# gitneighbr (development version)
+# gitneighbr 0.1.0
 
 Initial release of `gitneighbr`, a local, browser-based R package and application that helps people who are unfamiliar with Git understand, save, and publish changes in an existing Git repository — while remaining a fast, scriptable convenience tool for experienced users too.
 
