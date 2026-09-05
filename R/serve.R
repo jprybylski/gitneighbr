@@ -214,6 +214,23 @@
   as.integer(trimws(result$stdout))
 }
 
+#' Force-kill a single PID by number
+#'
+#' `tools::pskill()` is unreliable on Windows -- confirmed directly: it
+#' returns FALSE and leaves the process running even for an ordinary
+#' same-user child process that `taskkill` terminates without issue. Not
+#' an access-rights problem (killing an unrelated process would rightly
+#' fail); `pskill`'s Windows implementation itself just doesn't work here.
+#' @noRd
+.kill_pid <- function(pid) {
+  if (identical(.Platform$OS.type, "windows")) {
+    processx::run("taskkill", c("/F", "/PID", as.character(pid)), error_on_status = FALSE, timeout = 5)
+    invisible(NULL)
+  } else {
+    tools::pskill(pid, signal = tools::SIGKILL)
+  }
+}
+
 #' Kill a single PID, verified to be a gitneighbr server, and its matching parent
 #' @noRd
 .kill_gitneighbr_server_pid <- function(pid) {
@@ -224,11 +241,11 @@
       call. = FALSE
     )
   }
-  tools::pskill(pid, signal = tools::SIGKILL)
+  .kill_pid(pid)
 
   parent <- .parent_pid(pid)
   if (!is.na(parent) && .pid_looks_like_gitneighbr_server(parent)) {
-    tools::pskill(parent, signal = tools::SIGKILL)
+    .kill_pid(parent)
   }
   invisible(TRUE)
 }
