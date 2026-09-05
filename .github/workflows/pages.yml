@@ -1,0 +1,102 @@
+name: Deploy Docs
+
+# Triggered by release.yaml's own completion (`workflow_run`), not a plain
+# `push` -- release.yaml also runs on every push to main and, when VERSION
+# has moved, commits its own "chore: sync release metadata for X.Y.Z"
+# (bumping DESCRIPTION's Version and folding NEWS.md's "(development
+# version)" section into a dated one) and pushes that back to main *during
+# its own run*. A plain `on: push` trigger here would fire on the original
+# push (deploying the site from DESCRIPTION/NEWS.md as they stood *before*
+# that bump) and never fire again for the follow-up chore commit, since
+# GitHub doesn't re-trigger `push`-based workflows for a push made with the
+# default `GITHUB_TOKEN` -- so the deployed site would silently carry stale
+# release metadata indefinitely. `workflow_run` sidesteps both problems at
+# once: it fires exactly once per original push, strictly after
+# release.yaml's job (chore commit included) has finished, regardless of
+# which token made which commit.
+#
+# Ported from ../deckifyr's own pages.yml.
+on:
+  workflow_run:
+    workflows: ["release.yaml"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deploy at a time; let an in-flight one finish rather than cancelling it, since
+# cancelling a live Pages deploy mid-upload can leave the site in a half-updated state.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Manual dispatch always runs; a workflow_run-triggered build only
+    # runs if release.yaml actually succeeded and ran on main (it also
+    # supports workflow_dispatch itself, e.g. a dry run from a feature
+    # branch -- that shouldn't redeploy the live site).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # Explicit, not the workflow_run default: we want main's
+          # current tip (release.yaml's own chore commit included, if it
+          # made one during its run), not the commit that merely
+          # triggered release.yaml.
+          ref: main
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "release"
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      # pkgdown::build_home_md() globs every *.md file at the repo root
+      # (see pkgdown:::package_mds()) and publishes each as a standalone,
+      # sitemap-indexed page -- it only hardcodes README/LICENSE(.md)/NEWS
+      # as exceptions and does not consult .Rbuildignore. Without this,
+      # CLAUDE.md/AGENTS.md (internal agent-tooling instructions) and the
+      # historical pre-rename spec doc would get published and indexed
+      # alongside the real docs. This only touches the disposable CI
+      # checkout that produces the docs/ artifact, not the repo itself.
+      - name: Remove internal docs pkgdown would otherwise publish
+        run: rm -f AGENTS.md CLAUDE.md gitneighbor-package-specification.md
+
+      # r-lib's own canonical pkgdown.yaml example workflow
+      # (r-lib/actions/examples/pkgdown.yaml) uses exactly this action/needs
+      # combination.
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::pkgdown, local::.
+          needs: website
+
+      - name: Build pkgdown site
+        run: Rscript -e 'pkgdown::build_site(new_process = FALSE, install = FALSE)'
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

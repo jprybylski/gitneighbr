@@ -2,6 +2,8 @@
 
 <!-- badges: start -->
 [![R-CMD-check](https://github.com/jprybylski/gitneighbr/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/jprybylski/gitneighbr/actions/workflows/R-CMD-check.yaml)
+[![Codecov test coverage](https://codecov.io/gh/jprybylski/gitneighbr/graph/badge.svg)](https://codecov.io/gh/jprybylski/gitneighbr)
+[![pkgdown](https://github.com/jprybylski/gitneighbr/actions/workflows/pages.yml/badge.svg)](https://jprybylski.github.io/gitneighbr/)
 <!-- badges: end -->
 
 > **Git help, from a friendly neighbor.**
@@ -9,6 +11,22 @@
 `gitneighbr` is a local, browser-based R package and application that helps people who are unfamiliar with Git understand, save, and publish changes in a Git repository — while staying a fast, scriptable convenience tool for experienced users too.
 
 It deliberately exposes a small, safe subset of Git (status, commit, push, version tags, single-file restore, and `.gitignore` assistance) and refuses to automate anything requiring human judgment (such as diverged histories or merge conflicts).
+
+## Documentation
+
+Full documentation, including function reference and articles, is available at **[jprybylski.github.io/gitneighbr](https://jprybylski.github.io/gitneighbr/)**:
+
+- [Getting Started](https://jprybylski.github.io/gitneighbr/articles/getting-started.html)
+- [The Safety and Security Model](https://jprybylski.github.io/gitneighbr/articles/safety-model.html)
+
+---
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Repository status, ready](man/figures/app-status-ready.png) | ![Changes list](man/figures/app-changes-list.png) |
+| ![Diff viewer](man/figures/app-diff-viewer.png) | ![Save snapshot panel](man/figures/app-save-snapshot.png) |
 
 ---
 

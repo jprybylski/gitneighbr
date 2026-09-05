@@ -1,0 +1,98 @@
+# Release-on-merge automation, driven by the VERSION file (see
+# .github/scripts/sync-release-metadata.R). Never touches CRAN - only
+# creates/refreshes a GitHub release and tag, and syncs DESCRIPTION/NEWS.md
+# to match VERSION.
+#
+# Ported from ../deckifyr's own release.yaml (itself ported from
+# ../quartifyr and ../xpose.xtras). Unlike deckifyr, gitneighbr's main
+# branch has no protection ruleset, so the default GITHUB_TOKEN can push
+# the metadata-sync commit and tag directly - no deploy-key/SSH step
+# needed here.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview version detection/changelog without writing, tagging, or publishing anything"
+        type: boolean
+        default: true
+
+name: release.yaml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          needs: check
+
+      - name: Sync release metadata (DESCRIPTION/NEWS.md) to VERSION
+        id: sync
+        run: Rscript .github/scripts/sync-release-metadata.R
+
+      - name: Commit release metadata changes
+        if: steps.sync.outputs.changed == 'true' && env.DRY_RUN != 'true'
+        run: |
+          git commit -am "chore: sync release metadata for ${{ steps.sync.outputs.version }}"
+          git push origin HEAD:main
+
+      - name: Check whether this commit is already released
+        id: check
+        if: env.DRY_RUN != 'true'
+        run: |
+          already_tagged="$(git rev-parse -q --verify "refs/tags/${{ steps.sync.outputs.tag }}" || true)"
+          if [ "${{ steps.sync.outputs.changed }}" = "false" ] && [ "$already_tagged" = "$(git rev-parse HEAD)" ]; then
+            echo "This commit's metadata already matches VERSION and the tag already points here - nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build package tarball
+        if: env.DRY_RUN != 'true' && steps.check.outputs.skip != 'true'
+        run: R CMD build . --compact-vignettes=gs+qpdf
+
+      - name: Create release
+        if: env.DRY_RUN != 'true' && steps.check.outputs.skip != 'true' && steps.sync.outputs.action == 'new'
+        run: |
+          gh release create "${{ steps.sync.outputs.tag }}" \
+            "${{ steps.sync.outputs.tarball }}" \
+            --target "$(git rev-parse HEAD)" \
+            --title "${{ steps.sync.outputs.tag }}" \
+            --notes-file changelog.md
+
+      - name: Refresh existing release
+        if: env.DRY_RUN != 'true' && steps.check.outputs.skip != 'true' && steps.sync.outputs.action == 'refresh'
+        run: |
+          git tag -f "${{ steps.sync.outputs.tag }}" "$(git rev-parse HEAD)"
+          git push origin "${{ steps.sync.outputs.tag }}" --force
+          gh release edit "${{ steps.sync.outputs.tag }}" --notes-file changelog.md
+          gh release upload "${{ steps.sync.outputs.tag }}" "${{ steps.sync.outputs.tarball }}" --clobber

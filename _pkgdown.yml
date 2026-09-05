@@ -1,0 +1,59 @@
+url: https://jprybylski.github.io/gitneighbr/
+
+title: gitneighbr
+
+template:
+  bootstrap: 5
+  bslib:
+    primary: "#2E7D32"
+
+home:
+  title: gitneighbr
+  description: >-
+    A local, browser-based helper that helps people unfamiliar with Git
+    understand, save, and publish changes in an existing Git repository,
+    while remaining a fast, scriptable tool for experienced users too.
+
+navbar:
+  structure:
+    left: [intro, articles, reference, news]
+    right: [search, github]
+  components:
+    intro:
+      text: Get started
+      href: articles/getting-started.html
+    articles:
+      text: Articles
+      menu:
+        - text: Getting Started
+          href: articles/getting-started.html
+        - text: Safety and Security Model
+          href: articles/safety-model.html
+
+articles:
+  - title: Articles
+    navbar: ~
+    contents:
+      - getting-started
+      - safety-model
+
+reference:
+  - title: Open and manage a session
+    desc: >-
+      Launch the local app against a repository, keep a handle to the
+      background server process, and stop it again.
+    contents:
+      - open_repo
+      - GitneighbrSession
+      - stop_session
+  - title: Diagnose your setup
+    desc: >-
+      Read-only checks of Git availability, repository detection, upstream
+      configuration, and credential-helper presence -- without starting a
+      server or mutating the repository.
+    contents:
+      - doctor
+  - title: RStudio / Positron integration
+    desc: One-click launch from the RStudio/Positron Addins menu.
+    contents:
+      - gitneighbr_addin

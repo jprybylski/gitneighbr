@@ -8,3 +8,7 @@
 ^\.github$
 ^README\.Rmd$
 ^\.claude$
+^VERSION$
+^_pkgdown\.yml$
+^docs$
+^changelog\.md$

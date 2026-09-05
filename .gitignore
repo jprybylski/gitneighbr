@@ -5,6 +5,9 @@
 *.Rcheck/
 *.tar.gz
 
+# pkgdown site is built and deployed by .github/workflows/pages.yml, not committed
+docs/
+
 # frontend
 frontend/node_modules/
 frontend/dist/

@@ -79,6 +79,11 @@ When you open a repository, `gitneighbr` derives a clear primary state:
 - **Remote Updates Available**: Changes have been made on GitHub that you can safely fast-forward.
 - **Diverged or Conflicted**: Changes have been made both locally and remotely, or an unresolved merge conflict exists. In this case, `gitneighbr` safely explains the situation and provides an exportable diagnostic report rather than risking data loss.
 
+<!-- pkgdown copies man/figures/ into docs/reference/figures/ and rewrites
+     this relative path automatically when building the site. -->
+<img src="../man/figures/app-status-ready.png" alt="gitneighbr showing a clean, up-to-date repository status" width="700" loading="lazy">
+<p style="font-size:0.85em;">A repository that's clean and in sync with GitHub.</p>
+
 ### 2. Reviewing Changes & Diff Viewer
 
 The changed files list groups files by status:
@@ -87,7 +92,13 @@ The changed files list groups files by status:
 - Deleted files
 - Renamed or copied files
 
+<img src="../man/figures/app-changes-list.png" alt="gitneighbr showing a list of changed files" width="700" loading="lazy">
+<p style="font-size:0.85em;">The changes list for a repository with one modified file.</p>
+
 Clicking on any file opens a unified diff viewer highlighting exact additions and deletions.
+
+<img src="../man/figures/app-diff-viewer.png" alt="gitneighbr showing a unified diff for a modified file" width="700" loading="lazy">
+<p style="font-size:0.85em;">The diff viewer for a single modified file.</p>
 
 ### 3. Saving Snapshots (Commit)
 
@@ -96,6 +107,9 @@ Clicking on any file opens a unified diff viewer highlighting exact additions an
 3. Click **Save snapshot**.
 
 Only the selected files will be committed; any deselected or unstaged files remain untouched in your working directory.
+
+<img src="../man/figures/app-save-snapshot.png" alt="gitneighbr showing the save snapshot panel with a summary message" width="700" loading="lazy">
+<p style="font-size:0.85em;">Selecting a file and writing a snapshot summary before saving.</p>
 
 ### 4. Sending Changes to GitHub (Push)
 
