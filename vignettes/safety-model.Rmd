@@ -20,7 +20,7 @@ Git is an essential tool for collaborative software development, data science, a
 
 `gitneighbr` was created under the principle:
 
-> **"Be a good neighbor to your repository."**
+> **"Git help, from a friendly neighbor."**
 
 Being a good neighbor means:
 1. **Never damaging the repository or working tree**: `gitneighbr` never runs destructive commands like `git reset --hard`, `git push --force`, or `git clean -fdx`.

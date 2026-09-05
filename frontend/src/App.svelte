@@ -1249,7 +1249,7 @@
   <div class="header-row">
     <div>
       <h1>gitneighbr</h1>
-      <p class="tagline">Be a good neighbor to your repository.</p>
+      <p class="tagline">Git help, from a friendly neighbor.</p>
     </div>
     <div class="header-actions">
       {#if status?.github?.connected && status?.github?.user}

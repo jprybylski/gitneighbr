@@ -4,7 +4,7 @@
 [![R-CMD-check](https://github.com/jprybylski/gitneighbr/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/jprybylski/gitneighbr/actions/workflows/R-CMD-check.yaml)
 <!-- badges: end -->
 
-> **Be a good neighbor to your repository.**
+> **Git help, from a friendly neighbor.**
 
 `gitneighbr` is a local, browser-based R package and application that helps people who are unfamiliar with Git understand, save, and publish changes in a Git repository — while staying a fast, scriptable convenience tool for experienced users too.
 

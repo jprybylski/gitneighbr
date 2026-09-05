@@ -16,7 +16,7 @@ knitr::opts_chunk$set(
 
 ## What is gitneighbr?
 
-> **"Be a good neighbor to your repository."**
+> **"Git help, from a friendly neighbor."**
 
 `gitneighbr` is a local, browser-based R package and application designed to help people who are unfamiliar with Git understand, save, and publish changes in a Git repository — while staying a fast, scriptable convenience tool for experienced users too.
 

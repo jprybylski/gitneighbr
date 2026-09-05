@@ -2,7 +2,7 @@
 
 ## Product and technical specification
 
-**Working tagline:** Be a good neighbor to your repository.  
+**Working tagline:** Git help, from a friendly neighbor.  
 **Document status:** Proposed specification for the first implementation  
 **Target release:** `0.1.0`  
 **Primary distribution:** CRAN R package  
@@ -973,7 +973,7 @@ Suggested phrases:
 - **This snapshot is saved on your computer but has not reached GitHub yet.**
 - **GitHub has newer work. Get it before sending your changes.**
 - **These changes need a person to help combine them. gitneighbor has not changed anything.**
-- **Be a good neighbor: check what changed, leave a useful note, and send your work home.**
+- **All set — reviewed, noted, and sent home.**
 
 Avoid:
 

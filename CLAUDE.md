@@ -1,6 +1,6 @@
 # gitneighbr
 
-"Be a good neighbor to your repository."
+"Git help, from a friendly neighbor."
 
 ## What this is
 

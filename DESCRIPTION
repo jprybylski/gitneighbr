@@ -1,5 +1,5 @@
 Package: gitneighbr
-Title: Be a Good Neighbor to Your Repository
+Title: Git Help, from a Friendly Neighbor
 Version: 0.0.0.9000
 Authors@R:
     person("John", "Prybylski", , "jprybylski@gmail.com", role = c("aut", "cre"))
