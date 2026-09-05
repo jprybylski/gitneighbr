@@ -23,7 +23,7 @@
   REMOTE_UNREACHABLE = "Can't reach GitHub",
   REMOTE_AHEAD = "GitHub has newer work",
   DIVERGED = "Histories need to be combined",
-  DIRTY_BLOCKS_UPDATE = "Unsaved changes in the way",
+  DIRTY_BLOCKS_UPDATE = "Changes not yet in a snapshot are in the way",
   CONFLICTS_PRESENT = "Conflicts need attention",
   PROTECTED_BRANCH = "GitHub rejected this",
   HOOK_FAILED = "A repository hook rejected this",

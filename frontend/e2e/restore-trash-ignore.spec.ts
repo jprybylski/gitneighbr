@@ -15,7 +15,7 @@ test.describe("restore, trash, and ignore via ConfirmDialog", () => {
     await server.stop();
   });
 
-  test("Cancel leaves the file untouched, then Restore discards its unsaved changes", async ({ page }) => {
+  test("Cancel leaves the file untouched, then Restore discards its changes since the last snapshot", async ({ page }) => {
     await page.goto(server.url);
     const restoreButton = page.getByRole("button", { name: "Restore last saved version: README.md" });
 

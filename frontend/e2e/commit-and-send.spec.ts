@@ -15,7 +15,7 @@ test.describe("commit and send", () => {
     await server.stop();
   });
 
-  test("Save snapshot commits only the selected file, leaving the rest unsaved", async ({ page }) => {
+  test("Save snapshot commits only the selected file, leaving the rest out of the snapshot", async ({ page }) => {
     await page.goto(server.url);
 
     // Every change starts pre-selected; deselect the two this test isn't
@@ -29,7 +29,9 @@ test.describe("commit and send", () => {
     await page.getByRole("button", { name: "Save snapshot" }).click();
 
     await expect(page.getByText(/^Saved snapshot .+\.$/)).toBeVisible();
-    await expect(page.getByText("You have unsaved changes and saved snapshots waiting to be sent.")).toBeVisible();
+    await expect(
+      page.getByText("You have changes that aren't in a snapshot yet, plus saved snapshots waiting to be sent."),
+    ).toBeVisible();
   });
 
   test("Save and send commits the rest, tags the version, and pushes everything", async ({ page }) => {

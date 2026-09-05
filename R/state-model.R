@@ -168,10 +168,11 @@
   !is.null(result) && identical(result$status, 0L) && nzchar(trimws(result$stdout))
 }
 
-#' Number of unsaved-changes notices: how many whole days old is `HEAD`?
+#' Number of days since the last snapshot: how many whole days old is `HEAD`?
 #'
-#' Used only to decide whether to nudge about stale unsaved changes
-#' (spec/issue #30) - never for anything that gates a mutating action.
+#' Used only to decide whether to nudge about changes that have sat outside
+#' a snapshot for a while (spec/issue #30) - never for anything that gates
+#' a mutating action.
 #' @return An integer day count, or `NULL` if it can't be determined
 #'   (e.g. an unborn repository with no commits yet).
 #' @noRd
@@ -193,7 +194,7 @@
   as.integer(floor(as.numeric(Sys.time()) - committed_at) %/% 86400L)
 }
 
-#' Threshold (in whole days) before unsaved changes are called "stale"
+#' Threshold (in whole days) before changes outside a snapshot are called "stale"
 #' @noRd
 .stale_changes_days <- 14L
 

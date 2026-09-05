@@ -186,11 +186,11 @@
 
   const STATE_COPY: Record<string, string> = {
     READY: "Everything is saved and up to date.",
-    CHANGES_ONLY: "You have unsaved changes.",
+    CHANGES_ONLY: "You have changes that aren't in a snapshot yet.",
     LOCAL_ONLY: "You have saved snapshots waiting to be sent to GitHub.",
-    CHANGES_AND_LOCAL: "You have unsaved changes and saved snapshots waiting to be sent.",
+    CHANGES_AND_LOCAL: "You have changes that aren't in a snapshot yet, plus saved snapshots waiting to be sent.",
     REMOTE_ONLY_CLEAN: "GitHub has newer updates you don't have yet.",
-    REMOTE_ONLY_DIRTY: "GitHub has newer updates, and you also have unsaved changes.",
+    REMOTE_ONLY_DIRTY: "GitHub has newer updates, and you also have changes that aren't in a snapshot yet.",
     DIVERGED: "Local and GitHub work need help to combine.",
     CONFLICTED: "Some files contain changes that need help to combine.",
     AUTH_REQUIRED: "GitHub could not verify your access.",
@@ -830,13 +830,13 @@
     diffError = null;
   }
 
-  // spec Sec 8.7: restoring discards the file's current unsaved contents,
-  // so this always confirms first, naming the file and stating the
-  // consequence (point 3) via the shared focus-trapped ConfirmDialog.
+  // spec Sec 8.7: restoring discards the file's changes since the last
+  // snapshot, so this always confirms first, naming the file and stating
+  // the consequence (point 3) via the shared focus-trapped ConfirmDialog.
   async function restoreFile(path: string) {
     const ok = await confirmDialog.confirm({
       title: "Restore last saved version?",
-      message: `"${path}"'s current unsaved contents will be lost. This cannot be undone.`,
+      message: `"${path}"'s changes since the last snapshot will be lost. This cannot be undone.`,
       confirmLabel: "Restore",
       danger: true,
     });
@@ -1335,7 +1335,7 @@
         </section>
       {:else}
       <dl>
-        <dt>Unsaved changes</dt>
+        <dt>Not yet in a snapshot</dt>
         <dd>{status.staged_count + status.unstaged_count + status.untracked_count}</dd>
         <dt>Saved, not yet sent</dt>
         <dd>{status.ahead}</dd>
@@ -1548,6 +1548,9 @@
     {#if changes.length > 0}
       <section class="changes" aria-label="Changed files">
         <h2>Changes</h2>
+        <p class="changes-hint">
+          These files are already saved on your computer - they just haven't been included in a snapshot yet.
+        </p>
         <ul class="change-list">
           {#each changes as change (change.path)}
             <li class="change-row" class:active={activePath === change.path}>
@@ -2270,6 +2273,10 @@
 
   .changes {
     margin-top: 2rem;
+  }
+  .changes-hint {
+    color: var(--text-muted);
+    margin: 0.35rem 0 0;
   }
   .change-list {
     list-style: none;

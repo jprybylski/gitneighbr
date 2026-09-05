@@ -131,7 +131,7 @@ Diagnostic views must provide the exact Git command attempted, its exit status, 
 | Internal Git concept | Primary interface language | Secondary detail |
 | --- | --- | --- |
 | Working tree | Project folder | Working tree |
-| Modified/untracked files | Unsaved changes | Modified or new files |
+| Modified/untracked files | Changes not yet in a snapshot | Modified or new files |
 | Staging area/index | Not presented as a persistent concept | Selected files will be staged during save |
 | Commit | Saved snapshot | Git commit |
 | Push | Send to GitHub | Push to `origin/<branch>` |
@@ -145,7 +145,7 @@ Diagnostic views must provide the exact Git command attempted, its exit status, 
 | Ignore | Stop showing this kind of file | Add path or pattern to `.gitignore` |
 | Conflict | Changes need help to combine | Merge conflict |
 
-The application must not call a commit a “save” without the qualifier “snapshot” in explanatory copy, because saving a file and committing it are distinct operations.
+The application must not call a commit a “save” without the qualifier “snapshot” in explanatory copy, because saving a file and committing it are distinct operations. Because “save” already refers to a file reaching disk, the interface must not call a file’s uncommitted state “unsaved” — that directly contradicts what the user’s own editor or OS just told them. The first time the interface shows changes that are not yet in a snapshot, it must briefly clarify that those files are already saved on the user’s computer and simply haven’t been recorded in a snapshot yet.
 
 ---
 
@@ -160,7 +160,7 @@ The backend must reduce Git state to exactly one primary state and zero or more 
 | `READY` | Everything is safely on GitHub | None |
 | `CHANGES_ONLY` | You have changes that are not in a saved snapshot | Review and save |
 | `LOCAL_ONLY` | You have saved snapshots waiting to be sent | Send to GitHub |
-| `CHANGES_AND_LOCAL` | You have unsaved changes and saved snapshots waiting to be sent | Review and save, then send |
+| `CHANGES_AND_LOCAL` | You have changes that aren't in a snapshot yet, plus saved snapshots waiting to be sent | Review and save, then send |
 | `REMOTE_ONLY_CLEAN` | GitHub has newer work | Get GitHub changes |
 | `REMOTE_ONLY_DIRTY` | GitHub has newer work, and this folder also has changes | Save or restore local changes first |
 | `DIVERGED` | Local work and GitHub work need help to combine | Show intervention guidance |
@@ -266,7 +266,7 @@ Tag names must pass `git check-ref-format --allow-onelevel refs/tags/<name>`. Ex
 
 1. The user opens a changed tracked file.
 2. The interface shows **Restore last saved version**.
-3. Confirmation names the file and states that its current unsaved contents will be lost.
+3. Confirmation names the file and states that its changes since the last snapshot will be lost.
 4. The server verifies state freshness and restores only that path.
 5. Directory-wide restore is not supported in version `0.1.0`.
 
@@ -304,7 +304,7 @@ The interface must remain useful at a viewport width of 360 pixels and must not 
 
 **Clean**
 
-> Everything is safely on GitHub. There are no unsaved changes in this folder.
+> Everything is safely on GitHub. There are no changes waiting to be saved in this folder.
 
 **Changed**
 
@@ -680,7 +680,7 @@ Combined **Save and send** behavior is frontend orchestration over `/commit`, st
   },
   "primary_state": {
     "id": "CHANGES_AND_LOCAL",
-    "heading": "You have unsaved changes and a saved snapshot waiting to be sent",
+    "heading": "You have changes that aren't in a snapshot yet, plus a saved snapshot waiting to be sent",
     "recommended_action": "REVIEW_AND_SAVE"
   },
   "capabilities": {

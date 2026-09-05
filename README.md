@@ -14,11 +14,11 @@ It deliberately exposes a small, safe subset of Git (status, commit, push, versi
 
 ## Features
 
-- **Intuitive Repository Status**: Explains repository state in plain language before offering actions (Clean, Unsaved Changes, Local Snapshots Ahead, Remote Updates Available).
+- **Intuitive Repository Status**: Explains repository state in plain language before offering actions (Clean, Changes Not Yet in a Snapshot, Local Snapshots Ahead, Remote Updates Available).
 - **Safe Snapshot Workflow**: Select individual files, write clear summary messages, and save commits without altering unselected work.
 - **Push & Pull Safeguards**: Fetch-first safe send to GitHub and fast-forward-only updates to avoid unexpected merge commits.
 - **Safe File Management**:
-  - Revert unsaved edits on a single tracked file with explicit confirmation.
+  - Revert a single tracked file's changes since its last snapshot, with explicit confirmation.
   - Remove untracked files by sending them to your operating system's Trash / Recycle Bin (never `git clean`).
   - Add ignore rules to `.gitignore` with single-click rule suggestions.
 - **Version Tagging & Releases**: Create annotated semantic version tags and publish GitHub releases.

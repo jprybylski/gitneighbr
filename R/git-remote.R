@@ -268,7 +268,7 @@
   if (status$has_changes) {
     return(list(
       ok = FALSE, code = "DIRTY_BLOCKS_UPDATE",
-      message = "Save or clear your unsaved changes before getting updates.", recoverable = TRUE
+      message = "Save your changes into a snapshot, or clear them, before getting updates.", recoverable = TRUE
     ))
   }
 
