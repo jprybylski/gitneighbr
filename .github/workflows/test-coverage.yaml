@@ -18,6 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      # Unlike `R CMD check` (which sets this automatically), covr's own
+      # package_coverage() does not -- confirmed nothing in covr's
+      # namespace references NOT_CRAN at all. Without it, every
+      # skip_on_cran() test (test-session-lifecycle.R, test-port-is-open.R,
+      # test-git-identity.R, test-open-repo-errors.R -- the real live-server
+      # integration suites covering most of R/server.R, R/serve.R, and
+      # R/open-repo.R) silently skips here even though R-CMD-check.yaml
+      # exercises them fine, making coverage numbers (and patch-coverage
+      # gates on unrelated PRs) look far worse than the actual test suite.
+      NOT_CRAN: true
 
     steps:
       - uses: actions/checkout@v7
