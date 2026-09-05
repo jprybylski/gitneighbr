@@ -137,22 +137,36 @@
 
 #' Find PIDs listening on a TCP port
 #'
-#' `lsof`/`ps` don't exist on Windows, so that branch shells out to
-#' PowerShell's `Get-NetTCPConnection`/CIM `Win32_Process` instead (both
-#' available on every GitHub-supported and modern end-user Windows).
+#' `lsof` doesn't exist on Windows, so that branch parses `netstat -ano`
+#' instead -- unlike PowerShell's `Get-NetTCPConnection` (a NetTCPIP module
+#' cmdlet, subject to module-autoload/version quirks), `netstat` is a plain
+#' built-in binary present and stable on every Windows version.
 #' @noRd
 .pids_listening_on_port <- function(port) {
-  result <- if (identical(.Platform$OS.type, "windows")) {
-    .run_powershell(sprintf(
-      "(Get-NetTCPConnection -LocalPort %d -State Listen -ErrorAction SilentlyContinue).OwningProcess | Sort-Object -Unique",
-      as.integer(port)
-    ))
-  } else {
-    tryCatch(
-      processx::run("lsof", c("-ti", paste0("TCP:", port), "-sTCP:LISTEN"), error_on_status = FALSE, timeout = 5),
+  if (identical(.Platform$OS.type, "windows")) {
+    result <- tryCatch(
+      processx::run("netstat", c("-ano", "-p", "TCP"), error_on_status = FALSE, timeout = 5),
       error = function(e) NULL
     )
+    if (is.null(result)) {
+      return(integer())
+    }
+    lines <- strsplit(result$stdout, "\r?\n")[[1]]
+    listening <- lines[grepl("LISTENING", lines, fixed = TRUE)]
+    # Local address column is `host:port` (host may be 0.0.0.0, 127.0.0.1,
+    # or [::]) -- match ":<port>" followed by whitespace so e.g. port 9520
+    # can't match a local address ending in ...:19520.
+    matching <- listening[grepl(paste0(":", port, "(?=\\s)"), listening, perl = TRUE)]
+    pids <- vapply(matching, function(l) {
+      fields <- strsplit(trimws(l), "\\s+")[[1]]
+      suppressWarnings(as.integer(fields[length(fields)]))
+    }, integer(1), USE.NAMES = FALSE)
+    return(unique(pids[!is.na(pids)]))
   }
+  result <- tryCatch(
+    processx::run("lsof", c("-ti", paste0("TCP:", port), "-sTCP:LISTEN"), error_on_status = FALSE, timeout = 5),
+    error = function(e) NULL
+  )
   if (is.null(result) || !nzchar(trimws(result$stdout))) {
     return(integer())
   }
