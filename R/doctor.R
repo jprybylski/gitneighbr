@@ -119,7 +119,15 @@
   }
   files <- fs::dir_ls(dir, type = "file")
   files <- files[!grepl("\\.sample$", files)]
-  files <- files[file.access(files, mode = 1L) == 0L]
+  # Windows has no POSIX executable bit -- Sys.chmod()/file.access(mode = 1)
+  # cannot express it there (file.access() falls back to an existence
+  # check), and Git for Windows commonly runs with core.fileMode = false,
+  # ignoring the mode bit entirely and treating any non-.sample hook file as
+  # active. So only apply the executable-bit filter on platforms where it's
+  # a real, meaningful signal.
+  if (!identical(.Platform$OS.type, "windows")) {
+    files <- files[file.access(files, mode = 1L) == 0L]
+  }
   unname(fs::path_file(files))
 }
 

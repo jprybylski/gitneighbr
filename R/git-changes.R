@@ -321,9 +321,14 @@
 #' Unified diff text comparing an untracked file against nothing
 #' @noRd
 .diff_untracked_text <- function(repo_root, git_bin, path) {
+  # Deliberately the literal string "/dev/null", not base::nullfile(): Git's
+  # diff machinery pattern-matches this exact path (on every OS, including
+  # Windows builds of Git) to render a "diff against nothing" header without
+  # ever opening it. base::nullfile() returns "NUL" on Windows, which Git
+  # does not special-case the same way, producing a malformed diff.
   result <- processx::run(
     git_bin,
-    c("-C", repo_root, "diff", "--no-index", "--", base::nullfile(), path),
+    c("-C", repo_root, "diff", "--no-index", "--", "/dev/null", path),
     error_on_status = FALSE, timeout = 15
   )
   result$stdout

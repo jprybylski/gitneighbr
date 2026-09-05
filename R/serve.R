@@ -124,13 +124,35 @@
   )
 }
 
-#' Find PIDs listening on a TCP port (macOS/Linux)
+#' Run a PowerShell command and return its processx result, or NULL on error
 #' @noRd
-.pids_listening_on_port <- function(port) {
-  result <- tryCatch(
-    processx::run("lsof", c("-ti", paste0("TCP:", port), "-sTCP:LISTEN"), error_on_status = FALSE, timeout = 5),
+.run_powershell <- function(command) {
+  tryCatch(
+    processx::run("powershell", c("-NoProfile", "-NonInteractive", "-Command", command),
+      error_on_status = FALSE, timeout = 5
+    ),
     error = function(e) NULL
   )
+}
+
+#' Find PIDs listening on a TCP port
+#'
+#' `lsof`/`ps` don't exist on Windows, so that branch shells out to
+#' PowerShell's `Get-NetTCPConnection`/CIM `Win32_Process` instead (both
+#' available on every GitHub-supported and modern end-user Windows).
+#' @noRd
+.pids_listening_on_port <- function(port) {
+  result <- if (identical(.Platform$OS.type, "windows")) {
+    .run_powershell(sprintf(
+      "(Get-NetTCPConnection -LocalPort %d -State Listen -ErrorAction SilentlyContinue).OwningProcess | Sort-Object -Unique",
+      as.integer(port)
+    ))
+  } else {
+    tryCatch(
+      processx::run("lsof", c("-ti", paste0("TCP:", port), "-sTCP:LISTEN"), error_on_status = FALSE, timeout = 5),
+      error = function(e) NULL
+    )
+  }
   if (is.null(result) || !nzchar(trimws(result$stdout))) {
     return(integer())
   }
@@ -140,10 +162,17 @@
 #' Does this PID's command line look like a gitneighbr server?
 #' @noRd
 .pid_looks_like_gitneighbr_server <- function(pid) {
-  result <- tryCatch(
-    processx::run("ps", c("-o", "command=", "-p", as.character(pid)), error_on_status = FALSE, timeout = 5),
-    error = function(e) NULL
-  )
+  result <- if (identical(.Platform$OS.type, "windows")) {
+    .run_powershell(sprintf(
+      "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').CommandLine",
+      as.integer(pid)
+    ))
+  } else {
+    tryCatch(
+      processx::run("ps", c("-o", "command=", "-p", as.character(pid)), error_on_status = FALSE, timeout = 5),
+      error = function(e) NULL
+    )
+  }
   if (is.null(result)) {
     return(FALSE)
   }
@@ -154,10 +183,17 @@
 #' Get a PID's parent PID
 #' @noRd
 .parent_pid <- function(pid) {
-  result <- tryCatch(
-    processx::run("ps", c("-o", "ppid=", "-p", as.character(pid)), error_on_status = FALSE, timeout = 5),
-    error = function(e) NULL
-  )
+  result <- if (identical(.Platform$OS.type, "windows")) {
+    .run_powershell(sprintf(
+      "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').ParentProcessId",
+      as.integer(pid)
+    ))
+  } else {
+    tryCatch(
+      processx::run("ps", c("-o", "ppid=", "-p", as.character(pid)), error_on_status = FALSE, timeout = 5),
+      error = function(e) NULL
+    )
+  }
   if (is.null(result) || !nzchar(trimws(result$stdout))) {
     return(NA_integer_)
   }
