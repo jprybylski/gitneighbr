@@ -5,12 +5,14 @@
 #' surfaced separately by [doctor()]).
 #'
 #' Precedence, most urgent first: a repository that cannot be inspected at
-#' all; one whose `HEAD` cannot be described as a branch; one with
-#' human-judgment-required conflicts already present (spec Sec 13.3 forbids
-#' ever auto-resolving these); one where the last remote operation was
-#' rejected for authentication, which makes any ahead/behind count
-#' unreliable until it is retried; then the ordinary upstream/ahead/behind
-#' combinations.
+#' all; one with human-judgment-required conflicts already present (spec
+#' Sec 13.3 forbids ever auto-resolving these) - checked ahead of detached
+#' `HEAD` because a conflict stopped mid-rebase or mid-cherry-pick leaves
+#' `HEAD` detached too, and the conflict is the actionable fact; one whose
+#' `HEAD` cannot be described as a branch for any other reason; one where
+#' the last remote operation was rejected for authentication, which makes
+#' any ahead/behind count unreliable until it is retried; then the
+#' ordinary upstream/ahead/behind combinations.
 #'
 #' @param status A list as returned by `.git_status()`, or `NULL` if the
 #'   path is not inside a Git working tree.
@@ -31,11 +33,11 @@
   if (is.null(status)) {
     return("NOT_REPOSITORY")
   }
-  if (status$detached) {
-    return("DETACHED_HEAD")
-  }
   if ((status$conflicted_count %||% 0L) > 0L) {
     return("CONFLICTED")
+  }
+  if (status$detached) {
+    return("DETACHED_HEAD")
   }
   if (isTRUE(auth_required)) {
     return("AUTH_REQUIRED")
@@ -58,6 +60,57 @@
     return(if (has_changes) "REMOTE_ONLY_DIRTY" else "REMOTE_ONLY_CLEAN")
   }
   if (has_changes) "CHANGES_ONLY" else "READY"
+}
+
+#' Is a merge, rebase, cherry-pick, or revert currently in progress?
+#'
+#' Checks for the marker files/directories Git itself leaves behind while
+#' one of these operations is stopped on a conflict, via
+#' `git rev-parse --git-path` so the check works under worktrees and
+#' submodules without hardcoding a `.git/` layout. Purely a filesystem
+#' read - no state-changing Git call is made.
+#'
+#' @return One of `"merge"`, `"rebase"`, `"cherry-pick"`, `"revert"`, or
+#'   `NULL` if none is in progress.
+#' @noRd
+.git_in_progress_operation <- function(repo_root, git_bin) {
+  git_path <- function(name) {
+    result <- tryCatch(
+      processx::run(
+        git_bin, c("-C", repo_root, "rev-parse", "--git-path", name),
+        error_on_status = FALSE, timeout = 5
+      ),
+      error = function(e) NULL
+    )
+    if (is.null(result) || !identical(result$status, 0L)) {
+      return(NULL)
+    }
+    # `--git-path` prints its answer relative to `repo_root`, not to this
+    # process's own working directory, even when queried via `-C`.
+    trimws(result$stdout)
+  }
+  exists_at <- function(name) {
+    relative <- git_path(name)
+    if (is.null(relative)) {
+      return(FALSE)
+    }
+    path <- if (fs::is_absolute_path(relative)) relative else fs::path(repo_root, relative)
+    fs::file_exists(path) || fs::dir_exists(path)
+  }
+
+  if (exists_at("MERGE_HEAD")) {
+    return("merge")
+  }
+  if (exists_at("rebase-merge") || exists_at("rebase-apply")) {
+    return("rebase")
+  }
+  if (exists_at("CHERRY_PICK_HEAD")) {
+    return("cherry-pick")
+  }
+  if (exists_at("REVERT_HEAD")) {
+    return("revert")
+  }
+  NULL
 }
 
 #' Does a repository have any ignored (not just untracked) paths?
@@ -115,6 +168,35 @@
   !is.null(result) && identical(result$status, 0L) && nzchar(trimws(result$stdout))
 }
 
+#' Number of unsaved-changes notices: how many whole days old is `HEAD`?
+#'
+#' Used only to decide whether to nudge about stale unsaved changes
+#' (spec/issue #30) - never for anything that gates a mutating action.
+#' @return An integer day count, or `NULL` if it can't be determined
+#'   (e.g. an unborn repository with no commits yet).
+#' @noRd
+.days_since_last_commit <- function(repo_root, git_bin) {
+  result <- tryCatch(
+    processx::run(
+      git_bin, c("-C", repo_root, "log", "-1", "--format=%ct"),
+      error_on_status = FALSE, timeout = 5
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(result) || !identical(result$status, 0L) || !nzchar(trimws(result$stdout))) {
+    return(NULL)
+  }
+  committed_at <- suppressWarnings(as.numeric(trimws(result$stdout)))
+  if (is.na(committed_at)) {
+    return(NULL)
+  }
+  as.integer(floor(as.numeric(Sys.time()) - committed_at) %/% 86400L)
+}
+
+#' Threshold (in whole days) before unsaved changes are called "stale"
+#' @noRd
+.stale_changes_days <- 14L
+
 #' Local tag names (if any) pointing at the current `HEAD`
 #' @noRd
 .git_tags_at_head <- function(repo_root, git_bin) {
@@ -163,6 +245,12 @@
 
   if ((status$untracked_count %||% 0L) > 0L) {
     add("UNTRACKED_PRESENT", "There are untracked files in this repository.")
+  }
+  if (isTRUE(status$has_changes) && !isTRUE(status$unborn)) {
+    days_old <- .days_since_last_commit(repo_root, git_bin)
+    if (!is.null(days_old) && days_old >= .stale_changes_days) {
+      add("STALE_CHANGES", "It's been a while since your last saved snapshot.")
+    }
   }
   if (isTRUE(show_ignored) && .has_ignored_files(repo_root, git_bin)) {
     add("IGNORED_PRESENT", "There are ignored files in this repository.")
@@ -241,6 +329,11 @@
     list()
   }
   state <- .primary_state(status, git_ok, auth_required = isTRUE(session_state$auth_required))
+  in_progress_operation <- if (git_ok && !is.null(status)) {
+    .git_in_progress_operation(repo_root, git_bin)
+  } else {
+    NULL
+  }
 
   policy <- .read_repo_policy(repo_root)
   github_info <- .github_api_status(repo_root, git_bin, session_state = session_state, policy = policy)
@@ -268,6 +361,8 @@
     unstaged_count = status$unstaged_count %||% 0L,
     untracked_count = status$untracked_count %||% 0L,
     conflicted_count = status$conflicted_count %||% 0L,
+    in_progress_operation = in_progress_operation,
+    recovery = .recovery_commands(state, in_progress_operation, status$upstream),
     notices = notices,
     policy = policy,
     github = github_info,

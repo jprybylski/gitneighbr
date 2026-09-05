@@ -154,6 +154,23 @@ fixture_diverged <- function() {
   fx
 }
 
+# A merge stopped mid-conflict, `origin` configured (CONFLICTED; recovery
+# command guidance).
+fixture_conflicted <- function() {
+  fx <- fixture_clean_with_remote()
+
+  .e2e_run(fx$dir, "checkout", "-q", "-b", "side")
+  writeLines("side change", file.path(fx$dir, "README.md"))
+  .e2e_run(fx$dir, "commit", "-q", "-am", "side change")
+
+  .e2e_run(fx$dir, "checkout", "-q", "main")
+  writeLines("main change", file.path(fx$dir, "README.md"))
+  .e2e_run(fx$dir, "commit", "-q", "-am", "main change")
+
+  processx::run(.e2e_git, c("-C", fx$dir, "merge", "side"), error_on_status = FALSE)
+  fx
+}
+
 # git init + a commit made without ever configuring local/global identity
 # (IDENTITY_INCOMPLETE notice) -- serve.R additionally isolates HOME for
 # this fixture so the machine's real global identity isn't visible to the

@@ -48,6 +48,7 @@ repo <- switch(fixture_name,
   "local-only-with-remote" = fixture_local_only_with_remote(),
   "remote-ahead" = fixture_remote_ahead(),
   "diverged" = fixture_diverged(),
+  "conflicted" = fixture_conflicted(),
   "missing-identity" = fixture_missing_identity(),
   "with-policy" = fixture_with_policy(),
   stop("unknown fixture: ", fixture_name, call. = FALSE)

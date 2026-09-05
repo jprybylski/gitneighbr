@@ -63,6 +63,8 @@
     unstaged_count: number;
     untracked_count: number;
     conflicted_count: number;
+    in_progress_operation: "merge" | "rebase" | "cherry-pick" | "revert" | null;
+    recovery: RecoveryBlock[];
     notices: Notice[];
     policy?: PolicyData;
     github?: GitHubStatus;
@@ -167,6 +169,8 @@
 
   type DiagnosticCommand = { command: string; exit_status: number | null; stdout: string; stderr: string };
 
+  type RecoveryBlock = { heading: string; description: string; commands: string[]; risk: string };
+
   type DiagnosticReport = {
     generated_at: string;
     primary_state: string;
@@ -175,6 +179,8 @@
     ahead: number;
     behind: number;
     conflicted_files: string[];
+    in_progress_operation: "merge" | "rebase" | "cherry-pick" | "revert" | null;
+    recovery: RecoveryBlock[];
     commands: DiagnosticCommand[];
   };
 
@@ -332,6 +338,24 @@
   // needed until someone actually wants to hand the report to someone else.
   let diagnosticLoading = $state(false);
   let diagnosticError = $state<ApiError | null>(null);
+
+  // Manual recovery guidance (issue #30): copy-only commands the user runs
+  // themselves in their own terminal. gitneighbr never executes these.
+  let copiedRecoveryHeading = $state<string | null>(null);
+
+  async function copyRecoveryCommands(block: RecoveryBlock) {
+    const text = block.commands.join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedRecoveryHeading = block.heading;
+      setTimeout(() => {
+        if (copiedRecoveryHeading === block.heading) copiedRecoveryHeading = null;
+      }, 1500);
+    } catch {
+      // Clipboard access can be denied by the browser; the commands are
+      // still visible and selectable, so this is a silent no-op.
+    }
+  }
 
   // Phase 3 Collaboration state (issues #22, #23, #24, #25):
   let showGitHubModal = $state(false);
@@ -1192,6 +1216,18 @@
   </details>
 {/snippet}
 
+{#snippet recoveryBlock(block: RecoveryBlock)}
+  <details class="advanced-details" open aria-label={block.heading}>
+    <summary>{block.heading}</summary>
+    <p>{block.description}</p>
+    <pre class="advanced-stderr">{block.commands.join("\n")}</pre>
+    <p class="notices"><em>{block.risk}</em></p>
+    <button type="button" class="update-button" onclick={() => copyRecoveryCommands(block)}>
+      {copiedRecoveryHeading === block.heading ? "Copied" : "Copy commands"}
+    </button>
+  </details>
+{/snippet}
+
 {#snippet errorCard(err: ApiError)}
   <div class="card error" role="alert">
     {#if err.title}<p class="error-title">{err.title}</p>{/if}
@@ -1321,9 +1357,26 @@
         <section class="identity-section" aria-label="Get help with this repository">
           <h3>Get help from someone experienced with Git</h3>
           <p>
-            gitneighbr won't combine these changes on its own. Download a diagnostic report to share with someone
-            who can help - it includes this repository's state and the exact Git commands gitneighbr checked, with
-            passwords and tokens removed.
+            gitneighbr won't combine these changes on its own.
+            {#if status.in_progress_operation === "merge"}
+              You're in the middle of a merge that was started outside gitneighbr.
+            {:else if status.in_progress_operation === "rebase"}
+              You're in the middle of a rebase that was started outside gitneighbr.
+            {:else if status.in_progress_operation === "cherry-pick"}
+              You're in the middle of a cherry-pick that was started outside gitneighbr.
+            {:else if status.in_progress_operation === "revert"}
+              You're in the middle of a revert that was started outside gitneighbr.
+            {/if}
+          </p>
+          {#if status.recovery.length > 0}
+            <p>You'll need to run these yourself in a terminal - gitneighbr does not run them for you.</p>
+            {#each status.recovery as block (block.heading)}
+              {@render recoveryBlock(block)}
+            {/each}
+          {/if}
+          <p>
+            Or download a diagnostic report to share with someone who can help - it includes this repository's
+            state and the exact Git commands gitneighbr checked, with passwords and tokens removed.
           </p>
           <div id="diagnostic-result" tabindex="-1">
             {#if diagnosticError}

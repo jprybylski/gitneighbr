@@ -72,6 +72,14 @@ test_that(".diagnostic_report describes a diverged repository", {
     expect_true(startsWith(cmd$command, "git "))
     expect_true(is.numeric(cmd$exit_status) || is.na(cmd$exit_status))
   }
+
+  expect_null(report$in_progress_operation)
+  headings <- vapply(report$recovery, `[[`, character(1), "heading")
+  expect_setequal(headings, c("Combine with a merge", "Combine with a rebase"))
+  merge_block <- report$recovery[[which(headings == "Combine with a merge")]]
+  expect_equal(unlist(merge_block$commands), "git merge origin/main")
+  rebase_block <- report$recovery[[which(headings == "Combine with a rebase")]]
+  expect_equal(unlist(rebase_block$commands), "git rebase origin/main")
 })
 
 test_that(".diagnostic_report lists conflicted files without attempting a merge", {
@@ -94,6 +102,44 @@ test_that(".diagnostic_report lists conflicted files without attempting a merge"
 
   expect_equal(report$primary_state, "CONFLICTED")
   expect_equal(report$conflicted_files, "file.txt")
+
+  expect_equal(report$in_progress_operation, "merge")
+  headings <- vapply(report$recovery, `[[`, character(1), "heading")
+  expect_setequal(headings, c("Finish the merge", "Cancel the merge"))
+  abort_block <- report$recovery[[which(headings == "Cancel the merge")]]
+  expect_equal(unlist(abort_block$commands), "git merge --abort")
+})
+
+test_that(".diagnostic_report offers rebase-specific recovery commands during a stopped rebase", {
+  repo <- local_git_repo()
+  writeLines("base", file.path(repo$dir, "file.txt"))
+  repo$run("add", "file.txt")
+  repo$run("commit", "-q", "-m", "base commit")
+
+  repo$run("checkout", "-q", "-b", "feature")
+  writeLines("feature change", file.path(repo$dir, "file.txt"))
+  repo$run("commit", "-q", "-am", "feature commit")
+
+  repo$run("checkout", "-q", "main")
+  writeLines("main change", file.path(repo$dir, "file.txt"))
+  repo$run("commit", "-q", "-am", "main commit")
+
+  repo$run("checkout", "-q", "feature")
+  processx::run(repo$git, c("-C", repo$dir, "rebase", "main"), error_on_status = FALSE)
+
+  report <- .diagnostic_report(repo$dir, repo$git, fake_session_state())
+
+  expect_equal(report$primary_state, "CONFLICTED")
+  expect_equal(report$in_progress_operation, "rebase")
+  headings <- vapply(report$recovery, `[[`, character(1), "heading")
+  expect_setequal(headings, c("Continue the rebase", "Cancel the rebase"))
+  abort_block <- report$recovery[[which(headings == "Cancel the rebase")]]
+  expect_equal(unlist(abort_block$commands), "git rebase --abort")
+})
+
+test_that(".recovery_commands offers no guidance for ordinary states", {
+  expect_length(.recovery_commands("READY", NULL, NULL), 0L)
+  expect_length(.recovery_commands("CHANGES_ONLY", NULL, NULL), 0L)
 })
 
 test_that(".diagnostic_report sanitizes stdout/stderr and never touches the working tree", {

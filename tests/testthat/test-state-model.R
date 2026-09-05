@@ -66,6 +66,84 @@ test_that(".git_status reports conflicted_count for unmerged paths without doubl
   expect_equal(.primary_state(status, git_ok = TRUE), "CONFLICTED")
 })
 
+test_that(".git_in_progress_operation is NULL for a clean repo", {
+  repo <- local_git_repo()
+  writeLines("hello", file.path(repo$dir, "file.txt"))
+  repo$run("add", "file.txt")
+  repo$run("commit", "-q", "-m", "initial commit")
+
+  expect_null(.git_in_progress_operation(repo$dir, repo$git))
+})
+
+test_that(".git_in_progress_operation detects an in-progress merge", {
+  repo <- local_git_repo()
+  writeLines("base", file.path(repo$dir, "file.txt"))
+  repo$run("add", "file.txt")
+  repo$run("commit", "-q", "-m", "base")
+
+  repo$run("checkout", "-q", "-b", "side")
+  writeLines("side change", file.path(repo$dir, "file.txt"))
+  repo$run("commit", "-q", "-am", "side change")
+
+  repo$run("checkout", "-q", "main")
+  writeLines("main change", file.path(repo$dir, "file.txt"))
+  repo$run("commit", "-q", "-am", "main change")
+
+  processx::run(repo$git, c("-C", repo$dir, "merge", "side"), error_on_status = FALSE)
+
+  expect_equal(.git_in_progress_operation(repo$dir, repo$git), "merge")
+})
+
+test_that(".git_in_progress_operation detects an in-progress rebase", {
+  repo <- local_git_repo()
+  writeLines("base", file.path(repo$dir, "file.txt"))
+  repo$run("add", "file.txt")
+  repo$run("commit", "-q", "-m", "base")
+
+  repo$run("checkout", "-q", "-b", "feature")
+  writeLines("feature change", file.path(repo$dir, "file.txt"))
+  repo$run("commit", "-q", "-am", "feature commit")
+
+  repo$run("checkout", "-q", "main")
+  writeLines("main change", file.path(repo$dir, "file.txt"))
+  repo$run("commit", "-q", "-am", "main commit")
+
+  repo$run("checkout", "-q", "feature")
+  processx::run(repo$git, c("-C", repo$dir, "rebase", "main"), error_on_status = FALSE)
+
+  expect_equal(.git_in_progress_operation(repo$dir, repo$git), "rebase")
+})
+
+test_that(".status_notices reports STALE_CHANGES only once unsaved changes are old enough", {
+  repo <- local_git_repo()
+  old_date <- format(Sys.time() - 20 * 86400, "%Y-%m-%dT%H:%M:%S")
+  withr::with_envvar(
+    c(GIT_AUTHOR_DATE = old_date, GIT_COMMITTER_DATE = old_date),
+    {
+      writeLines("hello", file.path(repo$dir, "file.txt"))
+      repo$run("add", "file.txt")
+      repo$run("commit", "-q", "-m", "old commit")
+    }
+  )
+  writeLines("changed", file.path(repo$dir, "file.txt"))
+
+  status <- .git_status(repo$dir, repo$git)
+  codes <- vapply(.status_notices(repo$dir, repo$git, status, new_session_state()), `[[`, character(1), "code")
+  expect_true("STALE_CHANGES" %in% codes)
+})
+
+test_that(".status_notices omits STALE_CHANGES for recent changes", {
+  repo <- local_git_repo()
+  writeLines("hello", file.path(repo$dir, "file.txt"))
+  repo$run("add", "file.txt")
+  repo$run("commit", "-q", "-m", "recent commit")
+  writeLines("changed", file.path(repo$dir, "file.txt"))
+
+  status <- .git_status(repo$dir, repo$git)
+  codes <- vapply(.status_notices(repo$dir, repo$git, status, new_session_state()), `[[`, character(1), "code")
+  expect_false("STALE_CHANGES" %in% codes)
+})
+
 test_that(".status_notices reports untracked files and a non-GitHub remote", {
   repo <- local_git_repo()
   writeLines("hello", file.path(repo$dir, "file.txt"))
