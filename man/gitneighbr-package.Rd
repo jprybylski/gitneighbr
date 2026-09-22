@@ -12,6 +12,7 @@ A local, browser-based application that helps people who are unfamiliar with Git
 Useful links:
 \itemize{
   \item \url{https://github.com/jprybylski/gitneighbr}
+  \item \url{https://jprybylski.github.io/gitneighbr/}
   \item Report bugs at \url{https://github.com/jprybylski/gitneighbr/issues}
 }
 

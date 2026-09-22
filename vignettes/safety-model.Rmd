@@ -95,7 +95,7 @@ Restoring a modified tracked file reverts only that specific file to the `HEAD` 
 ### Trash-Based File Removal (No `git clean`)
 When a user chooses to delete an untracked file, `gitneighbr` moves the file to the operating system's native Trash / Recycle Bin:
 - macOS: `osascript` AppleScript Trash API
-- Linux: `gio trash` (freedesktop.org trash specification)
+- Linux: direct implementation of the freedesktop.org XDG Trash specification (`~/.local/share/Trash`, or `$XDG_DATA_HOME/Trash` when set) -- the same home trash Nautilus, Dolphin, and `trash-cli` use, without shelling out to a desktop-specific helper
 - Windows: PowerShell `Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile` with `SendToRecycleBin`
 
 This guarantees that discarded untracked files can be recovered by the user if deleted by mistake.

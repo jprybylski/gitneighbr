@@ -60,26 +60,38 @@ option, and class name in the codebase uses `gitneighbr`
   serve/stop; a real `/api/v1/status` endpoint backed by actual `git
   status` parsing; a minimal bun/Svelte page rendering it; local `R CMD
   check` clean.
-- **Phase 1 — 0.1.0 "Safe core workflow"**: the rest of what the spec
-  scopes into 0.1.0 — see the repo's issues labeled `phase-1`. Covers
-  doctor() diagnostics, changes list + diff viewer, commit, fetch-first
-  push, combined save-and-send, optional annotated tag, fast-forward-only
-  update, single-file restore, untracked-file removal via trash,
-  `.gitignore` assistance, the full state/notice model, the error
-  taxonomy + Advanced Details drawer, security hardening (Host header/DNS
-  rebinding checks, Origin validation, single-mutation locking),
-  accessibility (WCAG 2.2 AA), CRAN packaging readiness, and a usability
-  test with ≥5 target users.
-- **Phase 2 — 0.2.0 "Onboarding and recovery"**: see issues labeled
-  `phase-2`. Guided Git identity config + credential diagnostics, cloning
-  an existing GitHub repo, init + publish a new repo, improved
-  conflict-handoff/diagnostic export.
-- **Phase 3 — 0.3.0 "Collaboration"**: see issues labeled `phase-3`.
-  Optional GitHub API integration, protected-branch/PR workflow, release
-  creation from a pushed tag, repo policy config.
+- **Phase 1 — 0.1.0 "Safe core workflow" (done)**: the rest of what the
+  spec scopes into 0.1.0 — see the repo's closed issues labeled
+  `phase-1`. Covers doctor() diagnostics, changes list + diff viewer,
+  commit, fetch-first push, combined save-and-send, optional annotated
+  tag, fast-forward-only update, single-file restore, untracked-file
+  removal via trash, `.gitignore` assistance, the full state/notice
+  model, the error taxonomy + Advanced Details drawer, security
+  hardening (Host header/DNS rebinding checks, Origin validation,
+  single-mutation locking), accessibility (WCAG 2.2 AA), and CRAN
+  packaging readiness. The usability test with ≥5 target users
+  (issue #16) is the one item from this phase still open.
+- **Phase 2 — 0.2.0 "Onboarding and recovery" (done)**: see the repo's
+  closed issues labeled `phase-2`. Guided Git identity config +
+  credential diagnostics, cloning an existing GitHub repo, init +
+  publish a new repo, exportable diagnostic report for conflict/
+  divergence handoff.
+- **Phase 3 — 0.3.0 "Collaboration" (done)**: see the repo's closed
+  issues labeled `phase-3`. GitHub REST API integration (incl. GitHub
+  Enterprise), protected-branch/PR workflow, release creation from a
+  pushed tag, repo policy config (`.gitneighbr.json`).
+- **Current work**: pkgdown site / CI / release automation polish
+  (issue #32) and the Phase 1 usability test (issue #16) are the only
+  open issues; package version is still `0.1.0` pending that usability
+  pass. Test coverage is a standing gap — see `README.md`'s coverage
+  badge for the current number; the goal is as close to 100% as
+  practical, with `R/addins.R`, `R/server.R`, `R/git-trash.R`,
+  `R/git-release.R`, `R/session.R`, and `R/git-pr.R` the weakest spots
+  as of this writing.
 - **Deferred indefinitely** (per the spec, pending user research): general
-  branch management, history rewriting, a full merge-conflict editor,
-  arbitrary remote-hosting admin, IDE embedding as the primary experience.
+  branch management beyond what Phase 2/3 already cover, history
+  rewriting, a full merge-conflict editor, arbitrary remote-hosting
+  admin beyond GitHub, IDE embedding as the primary experience.
 
 ## Conventions
 
