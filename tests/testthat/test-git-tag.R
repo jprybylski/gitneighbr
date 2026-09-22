@@ -160,3 +160,24 @@ test_that(".git_push_tag fails with NO_UPSTREAM when the branch has none", {
   expect_false(result$ok)
   expect_equal(result$code, "NO_UPSTREAM")
 })
+
+test_that(".git_create_tag reports COMMAND_FAILED when `git tag` itself fails", {
+  skip_on_os("windows")
+  repo <- local_tag_repo_with_remote()
+  failing_git <- .make_failing_git(repo$git, "tag")
+
+  result <- .git_create_tag(repo$dir, failing_git, "v1.0.0")
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_false(is.null(result$advanced))
+})
+
+test_that(".git_push_tag refuses a detached HEAD", {
+  repo <- local_tag_repo_with_remote()
+  .git_create_tag(repo$dir, repo$git, "v1.0.0")
+  repo$run("checkout", "-q", "--detach", "HEAD")
+
+  result <- .git_push_tag(repo$dir, repo$git, "v1.0.0")
+  expect_false(result$ok)
+  expect_equal(result$code, "DETACHED_HEAD")
+})

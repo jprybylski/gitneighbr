@@ -58,6 +58,31 @@ test_that(".valid_origin_header allows an absent Origin, requires an exact match
   expect_false(.valid_origin_header("http://evil.example.com", 4123L))
 })
 
+test_that(".new_session_token returns a long, hex-encoded random string, different each call", {
+  a <- .new_session_token()
+  b <- .new_session_token()
+  expect_true(is.character(a) && nzchar(a))
+  expect_match(a, "^[0-9a-f]+$")
+  expect_false(identical(a, b))
+})
+
+test_that(".assert_loopback_host accepts both loopback spellings and rejects everything else", {
+  expect_invisible(.assert_loopback_host("127.0.0.1"))
+  expect_invisible(.assert_loopback_host("localhost"))
+  expect_error(.assert_loopback_host("0.0.0.0"), "only supports binding")
+  expect_error(.assert_loopback_host("evil.example.com"), "only supports binding")
+})
+
+test_that(".tokens_match requires an exact, same-length character match", {
+  expect_true(.tokens_match("abc123", "abc123"))
+  expect_false(.tokens_match("abc124", "abc123"))
+  expect_false(.tokens_match("short", "muchlonger"))
+  expect_false(.tokens_match(NULL, "abc123"))
+  expect_false(.tokens_match(NA_character_, "abc123"))
+  expect_false(.tokens_match(c("a", "b"), "abc123"))
+  expect_false(.tokens_match(123, "abc123"))
+})
+
 test_that(".new_operation_id returns distinct, non-empty opaque IDs", {
   a <- .new_operation_id()
   b <- .new_operation_id()

@@ -54,3 +54,52 @@ test_that("open_repo() raises a coded GIT_TOO_OLD error when the version is belo
   expect_s3_class(err, "gitneighbr_error_git_too_old")
   expect_equal(err$code, "GIT_TOO_OLD")
 })
+
+test_that("open_repo() raises NOT_REPOSITORY if repo_kind says worktree but the root can't be resolved", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+
+  testthat::local_mocked_bindings(.git_repo_kind = function(...) "worktree", .git_root = function(...) NULL)
+  err <- tryCatch(open_repo(path = ".", browse = FALSE, git = git), error = function(e) e)
+  expect_s3_class(err, "gitneighbr_error_not_repository")
+  expect_equal(err$code, "NOT_REPOSITORY")
+})
+
+test_that("open_repo() raises NOT_REPOSITORY when a non-repository path can't be made absolute", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  outside <- withr::local_tempdir()
+
+  testthat::local_mocked_bindings(.git_repo_kind = function(...) "none", .package = "gitneighbr")
+  testthat::local_mocked_bindings(path_abs = function(...) stop("boom"), .package = "fs")
+  err <- tryCatch(open_repo(path = outside, browse = FALSE, git = git), error = function(e) e)
+  expect_s3_class(err, "gitneighbr_error_not_repository")
+  expect_equal(err$code, "NOT_REPOSITORY")
+  expect_match(err$message, "not a usable location")
+})
+
+test_that("open_repo() calls session$browse() when browse = TRUE", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  dir <- withr::local_tempdir()
+  processx::run(git, c("-C", dir, "init", "-q", "-b", "main"), error_on_status = TRUE)
+
+  browsed <- FALSE
+  fake_session <- structure(list(browse = function() browsed <<- TRUE), class = "gitneighbr_session")
+  testthat::local_mocked_bindings(.gitneighbr_serve = function(...) fake_session)
+
+  ret <- open_repo(path = dir, browse = TRUE, git = git)
+  expect_true(browsed)
+  expect_identical(ret, fake_session)
+})
+
+test_that("stop_session(session) calls session$stop() directly", {
+  stopped <- FALSE
+  fake_session <- structure(list(stop = function() stopped <<- TRUE), class = "gitneighbr_session")
+  stop_session(fake_session)
+  expect_true(stopped)
+})
+
+test_that("stop_session() errors when neither session nor port is given", {
+  expect_error(stop_session(), "provide either")
+})

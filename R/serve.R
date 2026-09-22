@@ -86,7 +86,17 @@
   .assert_loopback_host(host)
 
   if (identical(port, 0L)) {
+    # `.find_free_port()` has an inherent, documented TOCTOU race between
+    # probing a port and it actually being bound a moment later (by this
+    # call or anything else on the machine). A caller-pinned `port` is left
+    # alone below (an explicit choice, not a race to retry around), but an
+    # auto-picked one gets a few attempts before giving up.
     port <- .find_free_port()
+    attempts <- 1L
+    while (.port_is_open(host, port) && attempts < 5L) {
+      port <- .find_free_port()
+      attempts <- attempts + 1L
+    }
   }
   if (.port_is_open(host, port)) {
     stop("gitneighbr: port ", port, " on ", host, " is already in use.", call. = FALSE)

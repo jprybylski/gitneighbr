@@ -40,6 +40,25 @@ test_that(".platform_name returns one of the recognized platform strings", {
   expect_true(.platform_name() %in% c("windows", "macos", "linux", "other"))
 })
 
+test_that(".platform_name maps every Sys.info() sysname to its platform string", {
+  testthat::local_mocked_bindings(Sys.info = function() c(sysname = "Windows"), .package = "base")
+  expect_equal(.platform_name(), "windows")
+
+  testthat::local_mocked_bindings(Sys.info = function() c(sysname = "Linux"), .package = "base")
+  expect_equal(.platform_name(), "linux")
+
+  testthat::local_mocked_bindings(Sys.info = function() c(sysname = "SunOS"), .package = "base")
+  expect_equal(.platform_name(), "other")
+})
+
+test_that(".ssh_agent_status reports unavailable-but-couldn't-run when ssh-add can't be executed", {
+  result <- .ssh_agent_status(ssh_add = "/definitely/not/a/real/ssh-add")
+  expect_true(result$available)
+  expect_false(result$running)
+  expect_false(result$has_keys)
+  expect_match(result$detail, "Could not run")
+})
+
 test_that(".https_helper_guidance and .ssh_agent_guidance give platform-specific text", {
   for (platform in c("windows", "macos", "linux", "other")) {
     https_msg <- .https_helper_guidance(platform)
@@ -118,6 +137,19 @@ test_that(".git_credential_diagnosis flags an SSH remote with no usable agent", 
   expect_equal(diagnosis$transport, "ssh")
   expect_equal(diagnosis$checks$ssh_agent$status, "fail")
   expect_length(diagnosis$guidance, 1L)
+})
+
+test_that(".git_credential_diagnosis reports an SSH remote with a loaded agent as ok", {
+  repo <- local_git_repo()
+  repo$run("remote", "add", "origin", "git@github.com:example/repo.git")
+  fake <- local_fake_ssh_add(0L, stdout = "2048 SHA256:abc user@host (ED25519)")
+  original <- .ssh_agent_status
+  testthat::local_mocked_bindings(.ssh_agent_status = function() original(ssh_add = fake))
+
+  diagnosis <- .git_credential_diagnosis(repo$dir, repo$git)
+  expect_equal(diagnosis$checks$ssh_agent$status, "ok")
+  expect_match(diagnosis$checks$ssh_agent$message, "1 key")
+  expect_length(diagnosis$guidance, 0L)
 })
 
 test_that(".git_credential_diagnosis reports no remote as a failing check", {

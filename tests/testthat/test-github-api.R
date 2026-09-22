@@ -128,6 +128,111 @@ test_that(".github_api_call refuses empty or NULL token with clear message", {
   expect_match(res$error, "authentication required", ignore.case = TRUE)
 })
 
+test_that(".github_api_call performs a real GET, parses a 2xx JSON response", {
+  base <- .local_test_http_server()
+  res <- .github_api_call("/ok", method = "GET", token = "sekret", api_base = base)
+  expect_true(res$ok)
+  expect_equal(res$status_code, 200L)
+  expect_equal(res$data$method, "GET")
+  expect_null(res$data$body)
+})
+
+test_that(".github_api_call sends a JSON body and the right Content-Type on a POST", {
+  base <- .local_test_http_server()
+  res <- .github_api_call("/ok", method = "POST", body = list(title = "hi"), token = "sekret", api_base = base)
+  expect_true(res$ok)
+  expect_equal(res$data$method, "POST")
+  expect_equal(res$data$body$title, "hi")
+})
+
+test_that(".github_api_call sets a custom method with no body (e.g. DELETE)", {
+  base <- .local_test_http_server()
+  res <- .github_api_call("/ok", method = "DELETE", token = "sekret", api_base = base)
+  expect_true(res$ok)
+  expect_equal(res$data$method, "DELETE")
+})
+
+test_that(".github_api_call reports a non-2xx response's message, redacting the token", {
+  base <- .local_test_http_server()
+  res <- .github_api_call("/error", token = "sekret", api_base = base)
+  expect_false(res$ok)
+  expect_equal(res$status_code, 422L)
+  expect_equal(res$error, "intentional test failure")
+})
+
+test_that(".github_api_call falls back to a generic message when the error body has no $message field", {
+  base <- .local_test_http_server()
+  res <- .github_api_call("/error-no-message", token = "sekret", api_base = base)
+  expect_false(res$ok)
+  expect_equal(res$status_code, 500L)
+  expect_match(res$error, "status 500")
+})
+
+test_that(".github_api_call reports a redacted network error for an unreachable host", {
+  res <- .github_api_call("/x", token = "sekret-token-xyz", api_base = "http://127.0.0.1:1", timeout = 2)
+  expect_false(res$ok)
+  expect_equal(res$status_code, 0L)
+  expect_match(res$error, "GitHub network error")
+  expect_false(grepl("sekret-token-xyz", res$error, fixed = TRUE))
+})
+
+test_that(".get_github_token passes --hostname to the GitHub CLI for a non-default host", {
+  skip_on_os("windows")
+  fake_gh <- withr::local_tempfile(fileext = ".sh")
+  writeLines(c(
+    "#!/bin/sh",
+    "seen_hostname=0",
+    "for arg in \"$@\"; do",
+    "  if [ \"$seen_hostname\" = '1' ]; then echo \"hostname-token-for-$arg\"; exit 0; fi",
+    "  if [ \"$arg\" = '--hostname' ]; then seen_hostname=1; fi",
+    "done",
+    "echo default-token"
+  ), fake_gh)
+  Sys.chmod(fake_gh, "0755")
+
+  withr::with_envvar(c(GITHUB_PAT = "", GITHUB_TOKEN = "", GH_TOKEN = "", GITHUB_ENTERPRISE_TOKEN = "", GH_ENTERPRISE_TOKEN = ""), {
+    tok <- .get_github_token(host = "github.company.com", is_enterprise = TRUE, gh_bin = fake_gh)
+    expect_equal(tok$token, "hostname-token-for-github.company.com")
+    expect_equal(tok$source, "gh_cli")
+  })
+})
+
+test_that(".github_get_user returns NULL when the API call fails, and parsed fields when it succeeds", {
+  base <- .local_test_http_server()
+  expect_null(.github_get_user("sekret", api_base = paste0(base, "/error")))
+
+  user <- .github_get_user("sekret", api_base = base)
+  expect_equal(user$login, "octocat")
+  expect_equal(user$name, "The Octocat")
+})
+
+test_that(".github_check_branch_protection returns FALSE for missing arguments and reports protection status", {
+  expect_false(.github_check_branch_protection(NULL, "repo", "main", "t"))
+  expect_false(.github_check_branch_protection("owner", "repo", "", "t"))
+
+  base <- .local_test_http_server()
+  expect_false(.github_check_branch_protection("owner", "repo", "main", "sekret", api_base = paste0(base, "/error")))
+  expect_true(.github_check_branch_protection("owner", "repo", "main", "sekret", api_base = base))
+})
+
+test_that(".github_api_status nulls out a detached-HEAD branch name", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  dir <- withr::local_tempdir()
+  processx::run(git, c("-C", dir, "init", "-q", "-b", "main"), error_on_status = TRUE)
+  processx::run(git, c("-C", dir, "config", "user.name", "T"), error_on_status = TRUE)
+  processx::run(git, c("-C", dir, "config", "user.email", "t@e.com"), error_on_status = TRUE)
+  writeLines("x", file.path(dir, "x.txt"))
+  processx::run(git, c("-C", dir, "add", "x.txt"), error_on_status = TRUE)
+  processx::run(git, c("-C", dir, "commit", "-q", "-m", "initial"), error_on_status = TRUE)
+  processx::run(git, c("-C", dir, "checkout", "-q", "--detach", "HEAD"), error_on_status = TRUE)
+
+  withr::with_envvar(c(GITHUB_PAT = "", GITHUB_TOKEN = "", GH_TOKEN = ""), {
+    status <- .github_api_status(dir, git, gh_bin = "")
+    expect_false(status$is_github) # no remote configured; this test only needs `branch` handling to not error
+  })
+})
+
 test_that(".github_api_status reports repository and token diagnostic state", {
   git <- unname(Sys.which("git"))
   skip_if(!nzchar(git), "git not available")

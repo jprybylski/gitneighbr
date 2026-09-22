@@ -34,3 +34,14 @@ test_that(".git_init_workspace refuses a folder that is already a Git repository
   expect_false(result$ok)
   expect_equal(result$code, "ALREADY_A_REPOSITORY")
 })
+
+test_that(".git_init_workspace reports COMMAND_FAILED when `git init` itself fails", {
+  false_bin <- unname(Sys.which("false"))
+  skip_if(!nzchar(false_bin), "no 'false' binary available")
+  dir <- withr::local_tempdir()
+
+  result <- .git_init_workspace(dir, false_bin)
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_false(is.null(result$advanced))
+})

@@ -29,7 +29,7 @@
 #' Avoids a naive `==` short-circuit timing side channel for token checks.
 #' @noRd
 .tokens_match <- function(supplied, expected) {
-  if (is.null(supplied) || !is.character(supplied) || length(supplied) != 1L) {
+  if (is.null(supplied) || !is.character(supplied) || length(supplied) != 1L || is.na(supplied)) {
     return(FALSE)
   }
   if (nchar(supplied) != nchar(expected)) {

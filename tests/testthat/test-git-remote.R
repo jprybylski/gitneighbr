@@ -47,12 +47,82 @@ test_that(".classify_fetch_failure and .classify_push_failure map common Git err
   expect_equal(.classify_fetch_failure("fatal: Authentication failed for 'https://...'"), "AUTH_REQUIRED")
   expect_equal(.classify_fetch_failure("fatal: something else broke"), "COMMAND_FAILED")
 
+  expect_equal(.classify_push_failure("fatal: could not resolve host: github.com"), "REMOTE_UNREACHABLE")
   expect_equal(.classify_push_failure("remote: error: GH006: Protected branch update failed"), "PROTECTED_BRANCH")
   expect_equal(.classify_push_failure("! [remote rejected] main -> main (hook declined)"), "HOOK_FAILED")
   expect_equal(.classify_push_failure("! [rejected] main -> main (non-fast-forward)"), "REMOTE_AHEAD")
   expect_equal(.classify_push_failure("remote: this exceeds GitHub's file size limit"), "LARGE_FILE_REJECTED")
   expect_equal(.classify_push_failure("fatal: Authentication failed"), "AUTH_REQUIRED")
+  expect_equal(.classify_push_failure("fatal: something else entirely"), "COMMAND_FAILED")
 })
+
+test_that(".git_upstream_info returns NULL for a branch with an empty remote or merge ref config", {
+  repo <- local_repo_with_remote()
+  repo$run("config", "branch.main.merge", "")
+  expect_null(.git_upstream_info(repo$dir, repo$git, "main"))
+})
+
+local_detached_repo <- function(env = parent.frame()) {
+  repo <- local_repo_with_remote(env = env)
+  repo$run("checkout", "-q", "--detach", "HEAD")
+  repo
+}
+
+test_that(".git_refresh_remote, .git_push_current_branch, and .git_update_current_branch all refuse a detached HEAD", {
+  repo <- local_detached_repo()
+  expect_equal(.git_refresh_remote(repo$dir, repo$git)$code, "DETACHED_HEAD")
+  expect_equal(.git_push_current_branch(repo$dir, repo$git)$code, "DETACHED_HEAD")
+  expect_equal(.git_update_current_branch(repo$dir, repo$git)$code, "DETACHED_HEAD")
+})
+
+test_that(".git_refresh_remote, .git_push_current_branch, and .git_update_current_branch report a classified fetch failure", {
+  skip_on_os("windows")
+  repo <- local_repo_with_remote()
+  failing_git <- .make_failing_git(repo$git, "fetch")
+
+  refreshed <- .git_refresh_remote(repo$dir, failing_git)
+  expect_false(refreshed$ok)
+  expect_equal(refreshed$code, "COMMAND_FAILED")
+  expect_false(is.null(refreshed$advanced))
+
+  pushed <- .git_push_current_branch(repo$dir, failing_git)
+  expect_false(pushed$ok)
+  expect_equal(pushed$code, "COMMAND_FAILED")
+
+  updated <- .git_update_current_branch(repo$dir, failing_git)
+  expect_false(updated$ok)
+  expect_equal(updated$code, "COMMAND_FAILED")
+})
+
+test_that(".git_push_current_branch reports a classified push failure", {
+  skip_on_os("windows")
+  repo <- local_repo_with_remote()
+  writeLines("local change", file.path(repo$dir, "local.txt"))
+  repo$run("add", "local.txt")
+  repo$run("commit", "-q", "-m", "local commit")
+  failing_git <- .make_failing_git(repo$git, "push")
+
+  result <- .git_push_current_branch(repo$dir, failing_git)
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_false(is.null(result$advanced))
+})
+
+test_that(".git_update_current_branch reports a classified merge failure", {
+  skip_on_os("windows")
+  repo <- local_repo_with_remote()
+  writeLines("more", file.path(repo$origin_dir, "more.txt"))
+  repo$origin_run("add", "more.txt")
+  repo$origin_run("commit", "-q", "-m", "remote-only commit")
+  repo$origin_run("push", "-q", "origin", "main")
+  failing_git <- .make_failing_git(repo$git, "merge")
+
+  result <- .git_update_current_branch(repo$dir, failing_git)
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_false(is.null(result$advanced))
+})
+
 
 test_that(".git_refresh_remote fetches and reports an up-to-date branch as clean", {
   repo <- local_repo_with_remote()
@@ -299,4 +369,49 @@ test_that(".git_publish_repo refuses to overwrite an existing origin without for
   forced <- .git_publish_repo(repo$dir, repo$git, url = second_remote, force = TRUE)
   expect_true(forced$ok)
   expect_equal(.git_remote_url(repo$dir, repo$git, "origin"), second_remote)
+})
+
+test_that(".git_publish_repo refuses a detached HEAD and an empty/blank URL", {
+  detached <- local_repo_with_remote()
+  detached$run("checkout", "-q", "--detach", "HEAD")
+  expect_equal(.git_publish_repo(detached$dir, detached$git, url = "https://example.com/x.git")$code, "DETACHED_HEAD")
+
+  clean_repo <- local_repo_without_remote()
+  empty <- .git_publish_repo(clean_repo$dir, clean_repo$git, url = "")
+  expect_false(empty$ok)
+  expect_equal(empty$code, "INVALID_REMOTE_URL")
+  blank <- .git_publish_repo(clean_repo$dir, clean_repo$git, url = "   ")
+  expect_equal(blank$code, "INVALID_REMOTE_URL")
+})
+
+test_that(".git_publish_repo reports COMMAND_FAILED when connecting the remote itself fails", {
+  skip_on_os("windows")
+  repo <- local_repo_without_remote()
+  failing_git <- .make_failing_git(repo$git, "remote")
+
+  result <- .git_publish_repo(repo$dir, failing_git, url = "https://example.com/x.git")
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_match(result$message, "Could not connect")
+})
+
+test_that(".git_publish_repo reports REMOTE_AHEAD with guidance when GitHub already has commits", {
+  repo <- local_repo_without_remote()
+  remote_dir <- withr::local_tempdir()
+  processx::run(repo$git, c("init", "-q", "--bare", "-b", "main", remote_dir), error_on_status = TRUE)
+  seed_dir <- withr::local_tempdir()
+  seed_run <- function(...) processx::run(repo$git, c("-C", seed_dir, ...), error_on_status = TRUE)
+  seed_run("init", "-q", "-b", "main")
+  seed_run("config", "user.email", "seed@example.com")
+  seed_run("config", "user.name", "Seed")
+  writeLines("readme", file.path(seed_dir, "README.md"))
+  seed_run("add", "README.md")
+  seed_run("commit", "-q", "-m", "auto-generated README")
+  seed_run("remote", "add", "origin", remote_dir)
+  seed_run("push", "-q", "-u", "origin", "main")
+
+  result <- .git_publish_repo(repo$dir, repo$git, url = remote_dir)
+  expect_false(result$ok)
+  expect_equal(result$code, "REMOTE_AHEAD")
+  expect_match(result$message, "already has commits")
 })
