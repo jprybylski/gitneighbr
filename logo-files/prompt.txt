@@ -1,0 +1,8 @@
+Use case: logo-brand
+Asset type: transparent point-up hexagonal R package sticker for gitneighbr.
+Primary request: A simple friendly neighbor wearing a cap that says "git", peeking over a picket fence. On the front of the picket fence the exact word "gitneighbr" is handwritten in dark marker.
+Style: polished minimal flat illustration, bold clear shapes, restrained linework, warm approachable personality. A single friendly adult neighbor; head and eyes visible over the fence, hands resting naturally on the fence. Simplify for readability as a small package logo.
+Composition: one regular point-up hexagon with perfectly straight sides and a clean consistent border; centered top and bottom vertices, vertical left and right sides. Artwork fills the hexagon and is entirely clipped within it. No objects outside hexagon. Transparent corners and exterior, genuine alpha. Use a portrait canvas with target proportions 1200 wide by 1390 high. Hexagon nearly fills canvas, only a tiny equal margin. No shadows outside hexagon.
+Scene: a simple green backdrop, cream/off-white wooden picket fence across the lower half, a warm orange cap for the neighbor. Bold dark outlines with a clean green border that suits the package's existing green branding.
+Text verbatim: lowercase "git" large and legible on the front of the cap; lowercase "gitneighbr" across the face of the fence, natural thick felt-tip marker handwriting, one continuous readable word spelled g-i-t-n-e-i-g-h-b-r. These are the only words. Keep lettering prominent and fully inside the hexagon. No extra title or slogan.
+Avoid: busy scenery, extra people, gradients, photographic rendering, tiny details, watermark, faux checkerboard transparency, rounded badge shape.

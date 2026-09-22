@@ -178,6 +178,64 @@ test_that(".git_commit_selected commits a renamed file selected as a unit", {
   expect_match(committed$stdout, "R100", fixed = TRUE)
 })
 
+test_that(".classify_commit_failure maps stderr text to stable error codes", {
+  expect_equal(.classify_commit_failure("Please tell me who you are."), "IDENTITY_MISSING")
+  expect_equal(.classify_commit_failure("unable to auto-detect email address"), "IDENTITY_MISSING")
+  expect_equal(.classify_commit_failure("*** empty ident name not allowed"), "IDENTITY_MISSING")
+  expect_equal(.classify_commit_failure("hook declined"), "HOOK_FAILED")
+  expect_equal(.classify_commit_failure("gpg failed to sign the data"), "SIGNING_FAILED")
+  expect_equal(.classify_commit_failure("error: could not sign the commit"), "SIGNING_FAILED")
+  expect_equal(.classify_commit_failure("something else entirely"), "COMMAND_FAILED")
+  expect_equal(.classify_commit_failure(NULL), "COMMAND_FAILED")
+})
+
+test_that(".git_commit_selected reports COMMAND_FAILED when `git write-tree` fails", {
+  skip_on_os("windows")
+  repo <- local_git_repo()
+  writeLines("hello", file.path(repo$dir, "a.txt"))
+  failing_git <- .make_failing_git(repo$git, "write-tree")
+
+  result <- .git_commit_selected(repo$dir, failing_git, "a.txt", summary = "Add a.txt")
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_match(result$message, "current index")
+})
+
+test_that(".git_commit_selected reports COMMAND_FAILED and restores the index when `git reset` fails", {
+  skip_on_os("windows")
+  repo <- local_git_repo()
+  writeLines("first", file.path(repo$dir, "a.txt"))
+  repo$run("add", "a.txt")
+  repo$run("commit", "-q", "-m", "initial commit")
+  writeLines("changed", file.path(repo$dir, "a.txt"))
+  writeLines("brand new", file.path(repo$dir, "b.txt"))
+  repo$run("add", "a.txt") # pre-staged, but deselected below -> triggers a `git reset`
+
+  failing_git <- .make_failing_git(repo$git, "reset")
+  result <- .git_commit_selected(repo$dir, failing_git, "b.txt", summary = "Add b.txt only")
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_match(result$message, "saved selection")
+
+  status <- .git_status(repo$dir, repo$git)
+  expect_equal(status$staged_count, 1L) # index restored to its pre-operation state
+})
+
+test_that(".git_commit_selected reports COMMAND_FAILED and restores the index when `git add` fails", {
+  skip_on_os("windows")
+  repo <- local_git_repo()
+  writeLines("hello", file.path(repo$dir, "a.txt"))
+  failing_git <- .make_failing_git(repo$git, "add")
+
+  result <- .git_commit_selected(repo$dir, failing_git, "a.txt", summary = "Add a.txt")
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_match(result$message, "stage the selected files")
+
+  status <- .git_status(repo$dir, repo$git)
+  expect_equal(status$staged_count, 0L)
+})
+
 test_that(".git_commit_selected refuses to commit while conflicts are present", {
   repo <- local_git_repo()
   writeLines("base", file.path(repo$dir, "a.txt"))

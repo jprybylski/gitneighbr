@@ -64,8 +64,14 @@
 #'   validation (spec Sec 12.1/12.2) -- the actual bind happens later, in
 #'   `plumber2::api_run()`, so this must match what's passed there.
 #' @param www_dir Directory containing the precompiled frontend.
+#' @param session_state Optional pre-built session-state environment (same
+#'   shape this function otherwise constructs itself). Exists so tests can
+#'   seed state -- e.g. `mutation_lock <- TRUE` to exercise the
+#'   `OPERATION_IN_PROGRESS` branch of every mutating endpoint without a real
+#'   race -- before the app is built; production callers always omit it.
 #' @noRd
-.build_api <- function(repo_root, git_bin, token, port, www_dir = system.file("www", package = "gitneighbr")) {
+.build_api <- function(repo_root, git_bin, token, port, www_dir = system.file("www", package = "gitneighbr"),
+                        session_state = NULL) {
   # plumber2's default JSON serializer does not auto-unbox length-1
   # vectors (so `list(ok = TRUE)` would serialize as `{"ok":[true]}`),
   # which is surprising for API clients. `register_serializer()` expects
@@ -90,14 +96,16 @@
   # (spec Sec 7.1) set by a failed fetch/push and cleared by the next
   # successful one, and the tag bookkeeping `.status_notices()` uses for
   # the "local-only tag" / "pushed tag" notices.
-  session_state <- new.env(parent = emptyenv())
-  session_state$version <- 0L
-  session_state$last_snapshot <- NULL
-  session_state$auth_required <- FALSE
-  session_state$pending_tags <- character()
-  session_state$pushed_tags <- character()
-  session_state$mutation_lock <- FALSE
-  session_state$github_token <- NULL
+  if (is.null(session_state)) {
+    session_state <- new.env(parent = emptyenv())
+    session_state$version <- 0L
+    session_state$last_snapshot <- NULL
+    session_state$auth_required <- FALSE
+    session_state$pending_tags <- character()
+    session_state$pushed_tags <- character()
+    session_state$mutation_lock <- FALSE
+    session_state$github_token <- NULL
+  }
 
   # DNS-rebinding mitigation (spec Sec 12.1): a request whose `Host` header
   # doesn't name this exact loopback authority is rejected outright, before
@@ -1031,12 +1039,12 @@
         ))
       }
       .ok_envelope(list(
-        release_id = result$release_id,
-        tag_name = result$tag_name,
-        name = result$name,
-        html_url = result$html_url,
-        draft = result$draft,
-        prerelease = result$prerelease
+        release_id = result$data$release_id,
+        tag_name = result$data$tag_name,
+        name = result$data$name,
+        html_url = result$data$html_url,
+        draft = result$data$draft,
+        prerelease = result$data$prerelease
       ), status_version = payload$version)
     }) |>
     plumber2::api_get("/api/v1/github/releases", function(request) {

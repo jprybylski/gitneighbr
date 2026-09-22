@@ -87,3 +87,18 @@ test_that(".git_restore_tracked_file fails with CONFLICTS_PRESENT for a conflict
   expect_false(result$ok)
   expect_equal(result$code, "CONFLICTS_PRESENT")
 })
+
+test_that(".git_restore_tracked_file reports COMMAND_FAILED when `git restore` itself fails", {
+  skip_on_os("windows")
+  repo <- local_git_repo()
+  writeLines("v1", file.path(repo$dir, "f.txt"))
+  repo$run("add", "f.txt")
+  repo$run("commit", "-q", "-m", "initial")
+  writeLines("v2 unsaved", file.path(repo$dir, "f.txt"))
+  failing_git <- .make_failing_git(repo$git, "restore")
+
+  result <- .git_restore_tracked_file(repo$dir, failing_git, "f.txt")
+  expect_false(result$ok)
+  expect_equal(result$code, "COMMAND_FAILED")
+  expect_false(is.null(result$advanced))
+})

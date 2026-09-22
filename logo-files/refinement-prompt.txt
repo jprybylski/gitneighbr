@@ -1,0 +1,6 @@
+Use case: precise-object-edit
+Edit target: the attached gitneighbr hex sticker.
+User refinement: simplify the person stylistically and make them more ambiguously gendered / androgynous.
+Change the human illustration only: a much simpler friendly gender-neutral face, small solid dot/oval eyes without white sclera or highlights, a minimal small nose mark and short gentle smile, subtle simple eyebrows, smooth rounded head, minimal hair mostly hidden beneath the cap without a strongly masculine or feminine haircut. No eyelashes, makeup, facial hair, or other gendered styling. Flat solid skin color without gradients or realistic shading. Simplify the hands to clean rounded forms with only necessary finger lines. Think understated friendly pictogram / clean editorial line illustration, not a detailed cartoon child. Maintain the same approximate head size and peek-over-fence pose.
+Preserve the orange baseball cap and exact lowercase word "git" on it. Preserve the green background and straight-sided hexagon border, off-white picket fence and exact handwritten marker word "gitneighbr" across it. Keep composition, colors, overall warmth and legibility. Do not introduce objects or text.
+Keep a perfectly point-up regular hexagonal silhouette on a genuinely transparent exterior with alpha. Target export proportions 1200 x 1390.

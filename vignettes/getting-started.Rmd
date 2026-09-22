@@ -61,7 +61,7 @@ doctor()
 
 `doctor()` checks:
 - Whether Git is installed and available on your `PATH`
-- Whether your Git version meets the minimum requirement (>= 2.28)
+- Whether your Git version meets the minimum requirement (>= 2.34)
 - Whether user identity (`user.name` and `user.email`) is configured
 - Whether credential helpers and SSH agents are configured
 - Whether the target directory is a valid Git repository

@@ -109,6 +109,23 @@ test_that(".git_set_identity writes to the global scope by default", {
   expect_equal(identity$email_scope, "global")
 })
 
+test_that(".git_set_identity reports COMMAND_FAILED when saving the name or the email fails", {
+  skip_on_os("windows")
+  repo <- local_identity_repo()
+
+  name_failing <- .make_failing_git(repo$git, "user.name")
+  name_result <- .git_set_identity(repo$dir, name_failing, name = "Ada Lovelace", email = "ada@example.com", scope = "local")
+  expect_false(name_result$ok)
+  expect_equal(name_result$code, "COMMAND_FAILED")
+  expect_match(name_result$message, "your name")
+
+  email_failing <- .make_failing_git(repo$git, "user.email")
+  email_result <- .git_set_identity(repo$dir, email_failing, name = "Ada Lovelace", email = "ada@example.com", scope = "local")
+  expect_false(email_result$ok)
+  expect_equal(email_result$code, "COMMAND_FAILED")
+  expect_match(email_result$message, "your email")
+})
+
 test_that("doctor() flags a missing identity as advisory and a complete one as ok", {
   repo <- local_identity_repo()
   writeLines("hello", file.path(repo$dir, "file.txt"))

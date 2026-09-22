@@ -70,3 +70,13 @@ test_that(".git_clone_repo rejects a blank URL", {
   expect_false(result$ok)
   expect_equal(result$code, "INVALID_REMOTE_URL")
 })
+
+test_that(".git_clone_repo reports a classified failure when `git clone` itself fails", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  dest <- file.path(withr::local_tempdir(), "project")
+
+  result <- .git_clone_repo(dest, git, file.path(withr::local_tempdir(), "no-such-remote"))
+  expect_false(result$ok)
+  expect_false(is.null(result$advanced))
+})
