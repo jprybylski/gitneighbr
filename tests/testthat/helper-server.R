@@ -38,7 +38,8 @@
 #' without a real race.
 #' @noRd
 .test_api <- function(repo_root, git_bin = unname(Sys.which("git")), token = "test-session-token",
-                       www_dir = NULL, session_state = NULL, env = parent.frame()) {
+                       www_dir = NULL, session_state = NULL, base_path = "/", managed = NULL,
+                       env = parent.frame()) {
   if (is.null(www_dir)) {
     www_dir <- withr::local_tempdir(.local_envir = env)
   }
@@ -49,7 +50,10 @@
   port <- NULL
   for (attempt in 1:5) {
     port <- gitneighbr:::.find_free_port()
-    app <- gitneighbr:::.build_api(repo_root, git_bin, token, port, www_dir = www_dir, session_state = session_state)
+    app <- gitneighbr:::.build_api(
+      repo_root, git_bin, token, port,
+      www_dir = www_dir, session_state = session_state, base_path = base_path, managed = managed
+    )
     server <- tryCatch(
       plumber2::api_run(app, host = "127.0.0.1", port = port, block = FALSE, silent = TRUE),
       error = function(e) NULL
@@ -60,7 +64,21 @@
     stop("gitneighbr test helper: could not bind a test server after 5 attempts.", call. = FALSE)
   }
   withr::defer(server$stop(), envir = env)
-  list(server = server, port = port, token = token, host = sprintf("127.0.0.1:%d", port))
+  list(server = server, port = port, token = token, host = sprintf("127.0.0.1:%d", port), managed = !is.null(managed))
+}
+
+#' An in-process managed session: managed Git, launcher token header
+#' @noRd
+.test_managed_api <- function(repo_root, features = "local", policy = NULL, env = parent.frame(), ...) {
+  git <- unname(Sys.which("git"))
+  testthat::skip_if(!nzchar(git), "git not available")
+  config <- withr::local_tempfile(.local_envir = env, fileext = ".gitconfig")
+  if (!is.null(policy)) {
+    policy <- gitneighbr:::.validate_launcher_policy(policy)
+  }
+  managed <- gitneighbr:::.managed_config(features = features, policy = policy)
+  git_bin <- gitneighbr:::.managed_git(git, config, remote = "remote" %in% managed$features, ...)
+  .test_api(repo_root, git_bin, managed = managed, env = env)
 }
 
 #' A fresh session-state environment, same shape `.build_api()` builds itself
@@ -107,7 +125,13 @@
 
 #' The `Authorization` header for a `.test_api()` instance's bearer token
 #' @noRd
-.api_auth <- function(api) list(Authorization = paste("Bearer", api$token))
+.api_auth <- function(api) {
+  if (isTRUE(api$managed)) {
+    list(`X-Gitneighbr-Token` = api$token)
+  } else {
+    list(Authorization = paste("Bearer", api$token))
+  }
+}
 
 #' Fetch the current `status_version` from a `.test_api()` instance
 #' @noRd

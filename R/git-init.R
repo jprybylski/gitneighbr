@@ -39,7 +39,7 @@
   # `-b main` needs Git >=2.28; `open_repo()` already enforces
   # `.min_git_version` (2.34.0) before the server ever starts.
   init_args <- c("-C", workspace_path, "init", "-q", "-b", "main")
-  result <- processx::run(git_bin, init_args, error_on_status = FALSE, timeout = 15)
+  result <- .git_exec(git_bin, init_args, error_on_status = FALSE, timeout = 15)
   if (!identical(result$status, 0L)) {
     return(list(
       ok = FALSE, code = "COMMAND_FAILED",

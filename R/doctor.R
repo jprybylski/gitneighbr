@@ -21,7 +21,7 @@
 #' @noRd
 .git_version <- function(git_bin) {
   result <- tryCatch(
-    processx::run(git_bin, "--version", error_on_status = FALSE, timeout = 5),
+    .git_exec(git_bin, "--version", error_on_status = FALSE, timeout = 5),
     error = function(e) NULL
   )
   if (is.null(result) || !identical(result$status, 0L)) {
@@ -38,14 +38,14 @@
 #' @noRd
 .git_repo_kind <- function(path, git_bin) {
   in_tree <- tryCatch(
-    processx::run(git_bin, c("-C", path, "rev-parse", "--is-inside-work-tree"), error_on_status = FALSE, timeout = 5),
+    .git_exec(git_bin, c("-C", path, "rev-parse", "--is-inside-work-tree"), error_on_status = FALSE, timeout = 5),
     error = function(e) NULL
   )
   if (!is.null(in_tree) && identical(in_tree$status, 0L) && identical(trimws(in_tree$stdout), "true")) {
     return("worktree")
   }
   is_bare <- tryCatch(
-    processx::run(git_bin, c("-C", path, "rev-parse", "--is-bare-repository"), error_on_status = FALSE, timeout = 5),
+    .git_exec(git_bin, c("-C", path, "rev-parse", "--is-bare-repository"), error_on_status = FALSE, timeout = 5),
     error = function(e) NULL
   )
   if (!is.null(is_bare) && identical(is_bare$status, 0L) && identical(trimws(is_bare$stdout), "true")) {
@@ -58,7 +58,7 @@
 #' @noRd
 .git_remote_url <- function(repo_root, git_bin, remote_name = "origin") {
   result <- tryCatch(
-    processx::run(git_bin, c("-C", repo_root, "remote", "get-url", remote_name), error_on_status = FALSE, timeout = 5),
+    .git_exec(git_bin, c("-C", repo_root, "remote", "get-url", remote_name), error_on_status = FALSE, timeout = 5),
     error = function(e) NULL
   )
   if (is.null(result) || !identical(result$status, 0L)) {
@@ -78,9 +78,7 @@
 #' @noRd
 .git_credential_helpers <- function(repo_root, git_bin) {
   result <- tryCatch(
-    processx::run(
-      git_bin,
-      c("-C", repo_root, "config", "--get-all", "credential.helper"),
+    .git_exec(git_bin, c("-C", repo_root, "config", "--get-all", "credential.helper"),
       error_on_status = FALSE,
       timeout = 5
     ),
@@ -97,7 +95,7 @@
 #' @noRd
 .git_hooks_dir <- function(repo_root, git_bin) {
   result <- tryCatch(
-    processx::run(git_bin, c("-C", repo_root, "rev-parse", "--git-path", "hooks"), error_on_status = FALSE, timeout = 5),
+    .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--git-path", "hooks"), error_on_status = FALSE, timeout = 5),
     error = function(e) NULL
   )
   if (is.null(result) || !identical(result$status, 0L)) {

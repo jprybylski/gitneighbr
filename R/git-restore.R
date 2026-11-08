@@ -49,8 +49,7 @@
   }
 
   restore_args <- c("-C", repo_root, "restore", "--worktree", "--", path)
-  restore_result <- processx::run(
-    git_bin, restore_args,
+  restore_result <- .git_exec(git_bin, restore_args,
     error_on_status = FALSE, timeout = 15
   )
   if (!identical(restore_result$status, 0L)) {

@@ -36,6 +36,11 @@ option, and class name in the codebase uses `gitneighbr`
   `processx` argv arrays (never a shell string) — this preserves the
   user's credential helpers, SSH agent, hooks, signing config, and LFS
   setup, and is a hard non-negotiable (see spec §10.3, §13).
+  **Managed mode** (`gitneighbr_serve()`, `inst/scripts/serve.R`; see
+  `vignette("launcher")`) is the one deliberate exception: a launcher
+  supplies a trusted Git, and `.git_exec()` (R/git-exec.R) runs it with a
+  locked-down environment and configuration. Every Git call goes through
+  `.git_exec()`, in both modes; a test enforces it.
 - **Frontend**: a Svelte + TypeScript SPA, built with **bun** (`bun install`,
   `bun run build`) instead of npm — source lives in `frontend/`, and the
   compiled, committed output ships in `inst/www/` so installing/loading the

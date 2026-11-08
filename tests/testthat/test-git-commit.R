@@ -85,8 +85,8 @@ test_that(".git_commit_selected does not include a previously staged, now-desele
   expect_equal(files, "b.txt")
 
   status <- .git_status(repo$dir, repo$git)
-  expect_equal(status$staged_count, 0L)
-  expect_equal(status$unstaged_count, 1L) # a.txt's edit is back to unstaged, not lost
+  expect_equal(status$staged_count, 1L) # a.txt stays staged exactly as the user left it
+  expect_equal(status$unstaged_count, 0L)
   expect_equal(readLines(file.path(repo$dir, "a.txt")), "first changed")
 })
 
@@ -138,7 +138,7 @@ test_that(".git_commit_selected reports HOOK_FAILED with a sanitized advanced bl
   result <- .git_commit_selected(repo$dir, repo$git, "a.txt", summary = "Add a.txt")
   expect_false(result$ok)
   expect_equal(result$code, "HOOK_FAILED")
-  expect_match(result$advanced$command, "^git -C .* commit -F .*$")
+  expect_match(result$advanced$command, "^git -C .* commit -q -F .*$")
   expect_equal(result$advanced$exit_status, 1L)
   expect_false(grepl(home, result$advanced$stderr, fixed = TRUE))
   expect_match(result$advanced$stderr, "~/secrets", fixed = TRUE)
@@ -198,27 +198,83 @@ test_that(".git_commit_selected reports COMMAND_FAILED when `git write-tree` fai
   result <- .git_commit_selected(repo$dir, failing_git, "a.txt", summary = "Add a.txt")
   expect_false(result$ok)
   expect_equal(result$code, "COMMAND_FAILED")
-  expect_match(result$message, "current index")
+  expect_match(result$message, "record the selected files")
 })
 
-test_that(".git_commit_selected reports COMMAND_FAILED and restores the index when `git reset` fails", {
-  skip_on_os("windows")
+test_that(".git_commit_selected keeps a partially staged, unselected file's staging", {
   repo <- local_git_repo()
-  writeLines("first", file.path(repo$dir, "a.txt"))
+  writeLines(c("one", "two"), file.path(repo$dir, "c.txt"))
+  repo$run("add", "c.txt")
+  repo$run("commit", "-q", "-m", "initial commit")
+  writeLines(c("one staged", "two"), file.path(repo$dir, "c.txt"))
+  repo$run("add", "c.txt")
+  writeLines(c("one staged", "two unstaged"), file.path(repo$dir, "c.txt"))
+  writeLines("new", file.path(repo$dir, "d.txt"))
+  staged_before <- processx::run(repo$git, c("-C", repo$dir, "diff", "--cached"))$stdout
+
+  result <- .git_commit_selected(repo$dir, repo$git, "d.txt", summary = "Add d.txt")
+  expect_true(result$ok)
+  expect_identical(processx::run(repo$git, c("-C", repo$dir, "diff", "--cached"))$stdout, staged_before)
+  expect_identical(readLines(file.path(repo$dir, "c.txt")), c("one staged", "two unstaged"))
+})
+
+test_that(".git_commit_selected refuses when HEAD moved since the list was shown", {
+  repo <- local_git_repo()
+  writeLines("a", file.path(repo$dir, "a.txt"))
   repo$run("add", "a.txt")
   repo$run("commit", "-q", "-m", "initial commit")
-  writeLines("changed", file.path(repo$dir, "a.txt"))
-  writeLines("brand new", file.path(repo$dir, "b.txt"))
-  repo$run("add", "a.txt") # pre-staged, but deselected below -> triggers a `git reset`
+  seen <- trimws(processx::run(repo$git, c("-C", repo$dir, "rev-parse", "HEAD"))$stdout)
+  writeLines("b", file.path(repo$dir, "b.txt"))
+  repo$run("add", "b.txt")
+  repo$run("commit", "-q", "-m", "someone else")
+  writeLines("e", file.path(repo$dir, "e.txt"))
 
-  failing_git <- .make_failing_git(repo$git, "reset")
-  result <- .git_commit_selected(repo$dir, failing_git, "b.txt", summary = "Add b.txt only")
+  result <- .git_commit_selected(repo$dir, repo$git, "e.txt", summary = "Add e.txt", expected_head = seen)
   expect_false(result$ok)
-  expect_equal(result$code, "COMMAND_FAILED")
-  expect_match(result$message, "saved selection")
+  expect_equal(result$code, "STATE_CHANGED")
+  expect_equal(trimws(processx::run(repo$git, c("-C", repo$dir, "log", "-1", "--format=%s"))$stdout), "someone else")
+})
 
+test_that(".git_commit_selected refuses Git's own data and paths through a linked folder", {
+  skip_on_os("windows")
+  repo <- local_git_repo()
+  outside <- withr::local_tempdir()
+  writeLines("secret", file.path(outside, "s.txt"))
+  file.symlink(outside, file.path(repo$dir, "linked"))
+  expect_false(.commit_path_is_safe(repo$dir, "linked/s.txt"))
+  expect_false(.commit_path_is_safe(repo$dir, ".git/config"))
+  expect_false(.commit_path_is_safe(repo$dir, ".GIT/config"))
+  expect_false(.commit_path_is_safe(repo$dir, "../x"))
+  expect_true(.commit_path_is_safe(repo$dir, "linked"))
+  expect_true(.commit_path_is_safe(repo$dir, "sub/new.txt"))
+})
+
+test_that(".git_commit_selected commits on an unborn branch with a managed Git, without hooks", {
+  repo <- local_git_repo()
+  marker <- file.path(withr::local_tempdir(), "marker")
+  hook <- file.path(repo$dir, ".git", "hooks", "pre-commit")
+  writeLines(c("#!/bin/sh", paste0("touch '", marker, "'")), hook)
+  Sys.chmod(hook, "0755")
+  git <- .managed_git(repo$git, withr::local_tempfile(fileext = ".gitconfig"))
+  writeLines("a", file.path(repo$dir, "a.txt"))
+  writeLines("b", file.path(repo$dir, "b.txt"))
+
+  result <- .git_commit_selected(repo$dir, git, "a.txt", summary = "Add a.txt", expected_head = "")
+  expect_true(result$ok)
+  expect_false(file.exists(marker))
+  files <- processx::run(repo$git, c("-C", repo$dir, "show", "--name-only", "--format="))$stdout
+  expect_identical(trimws(files), "a.txt")
+  reflog <- processx::run(repo$git, c("-C", repo$dir, "reflog", "-1", "--format=%gs"))$stdout
+  expect_match(reflog, "commit: Add a.txt", fixed = TRUE)
+
+  # A second commit moves HEAD only from the commit it was shown.
+  first <- trimws(processx::run(repo$git, c("-C", repo$dir, "rev-parse", "HEAD"))$stdout)
+  again <- .git_commit_selected(repo$dir, git, "b.txt", summary = "Add b.txt", expected_head = first)
+  expect_true(again$ok)
+  parent <- trimws(processx::run(repo$git, c("-C", repo$dir, "rev-parse", "HEAD^"))$stdout)
+  expect_identical(parent, first)
   status <- .git_status(repo$dir, repo$git)
-  expect_equal(status$staged_count, 1L) # index restored to its pre-operation state
+  expect_false(status$has_changes)
 })
 
 test_that(".git_commit_selected reports COMMAND_FAILED and restores the index when `git add` fails", {
@@ -253,4 +309,36 @@ test_that(".git_commit_selected refuses to commit while conflicts are present", 
   result <- .git_commit_selected(repo$dir, repo$git, "b.txt", summary = "Try to save anyway")
   expect_false(result$ok)
   expect_equal(result$code, "CONFLICTS_PRESENT")
+})
+
+test_that(".git_commit_selected saves nothing for a path it can't trust, or when HEAD moves mid-save", {
+  repo <- .new_test_repo()
+  writeLines("a", file.path(repo$dir, "a.txt"))
+  repo$run("add", "a.txt")
+  repo$run("commit", "-q", "-m", "initial commit")
+  head <- function() trimws(processx::run(repo$git, c("-C", repo$dir, "rev-parse", "HEAD"))$stdout)
+  before <- head()
+  writeLines("x", file.path(repo$dir, "x.txt"))
+
+  local({
+    local_mocked_bindings(.commit_path_is_safe = function(...) FALSE)
+    result <- .git_commit_selected(repo$dir, repo$git, "x.txt", summary = "Add x")
+    expect_identical(result$code, "PATH_REJECTED")
+  })
+  expect_identical(head(), before)
+
+  git <- .managed_git(repo$git, config_file = withr::local_tempfile(fileext = ".gitconfig"))
+  real_exec <- gitneighbr:::.git_exec
+  local({
+    # Another writer wins the race: update-ref's compare-and-swap fails.
+    local_mocked_bindings(.git_exec = function(git_bin, args, ...) {
+      if ("update-ref" %in% args) {
+        return(list(status = 1L, stdout = "", stderr = "cannot lock ref 'HEAD'"))
+      }
+      real_exec(git_bin, args, ...)
+    })
+    result <- .git_commit_selected(repo$dir, git, "x.txt", summary = "Add x")
+    expect_identical(result$code, "STATE_CHANGED")
+  })
+  expect_identical(head(), before)
 })

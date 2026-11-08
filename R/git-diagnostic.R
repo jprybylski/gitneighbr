@@ -6,7 +6,7 @@
 #' @noRd
 .diagnostic_command <- function(repo_root, git_bin, args, timeout = 15) {
   result <- tryCatch(
-    processx::run(git_bin, c("-C", repo_root, args), error_on_status = FALSE, timeout = timeout),
+    .git_exec(git_bin, c("-C", repo_root, args), error_on_status = FALSE, timeout = timeout),
     error = function(e) list(status = NA_integer_, stdout = "", stderr = conditionMessage(e))
   )
   list(

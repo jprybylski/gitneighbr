@@ -8,8 +8,7 @@
   if (is.null(name) || length(name) != 1L || !is.character(name) || is.na(name) || !nzchar(name)) {
     return(FALSE)
   }
-  result <- processx::run(
-    git_bin, c("check-ref-format", "--allow-onelevel", paste0("refs/tags/", name)),
+  result <- .git_exec(git_bin, c("check-ref-format", "--allow-onelevel", paste0("refs/tags/", name)),
     error_on_status = FALSE, timeout = 5
   )
   identical(result$status, 0L)
@@ -18,8 +17,7 @@
 #' Whether a tag name already exists in the local repository
 #' @noRd
 .git_tag_exists_locally <- function(repo_root, git_bin, name) {
-  result <- processx::run(
-    git_bin, c("-C", repo_root, "show-ref", "--verify", "--quiet", paste0("refs/tags/", name)),
+  result <- .git_exec(git_bin, c("-C", repo_root, "show-ref", "--verify", "--quiet", paste0("refs/tags/", name)),
     error_on_status = FALSE, timeout = 5
   )
   identical(result$status, 0L)
@@ -83,8 +81,7 @@
   Sys.chmod(msg_file, "0600")
 
   tag_args <- c("-C", repo_root, "tag", "-a", name, "-F", msg_file)
-  tag_result <- processx::run(
-    git_bin, tag_args,
+  tag_result <- .git_exec(git_bin, tag_args,
     error_on_status = FALSE, timeout = 15
   )
   if (!identical(tag_result$status, 0L)) {
@@ -96,8 +93,7 @@
     ))
   }
 
-  sha <- trimws(processx::run(
-    git_bin, c("-C", repo_root, "rev-parse", "--short", paste0(name, "^{commit}")),
+  sha <- trimws(.git_exec(git_bin, c("-C", repo_root, "rev-parse", "--short", paste0(name, "^{commit}")),
     error_on_status = TRUE, timeout = 15
   )$stdout)
 
@@ -152,8 +148,7 @@
 
   refspec <- paste0("refs/tags/", name, ":refs/tags/", name)
   push_args <- c("-C", repo_root, "push", upstream_info$remote, refspec)
-  push_result <- processx::run(
-    git_bin, push_args,
+  push_result <- .git_exec(git_bin, push_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(push_result$status, 0L)) {

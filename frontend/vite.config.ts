@@ -7,6 +7,9 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 // ever runs this step; run `bun run build` here and commit the result.
 export default defineConfig({
   plugins: [svelte()],
+  // Relative asset URLs, so the app also works when a reverse proxy serves
+  // it under a path prefix (the server adds a matching <base href>).
+  base: "./",
   build: {
     outDir: "../inst/www",
     emptyOutDir: true,

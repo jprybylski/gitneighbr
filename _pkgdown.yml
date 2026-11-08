@@ -27,6 +27,8 @@ navbar:
       menu:
         - text: Safety and Security Model
           href: articles/safety-model.html
+        - text: Running gitneighbr from a launcher
+          href: articles/launcher.html
 
 articles:
   - title: Articles
@@ -34,6 +36,7 @@ articles:
     contents:
       - getting-started
       - safety-model
+      - launcher
 
 reference:
   - title: Open and manage a session
@@ -44,6 +47,12 @@ reference:
       - open_repo
       - GitneighbrSession
       - stop_session
+  - title: Run from a launcher
+    desc: >-
+      A foreground, managed session for a program that runs gitneighbr
+      behind its own local address.
+    contents:
+      - gitneighbr_serve
   - title: Diagnose your setup
     desc: >-
       Read-only checks of Git availability, repository detection, upstream

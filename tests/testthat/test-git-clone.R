@@ -80,3 +80,13 @@ test_that(".git_clone_repo reports a classified failure when `git clone` itself 
   expect_false(result$ok)
   expect_false(is.null(result$advanced))
 })
+
+test_that(".git_clone_repo never reads a URL as a Git option", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  marker <- file.path(withr::local_tempdir(), "marker")
+  dest <- file.path(withr::local_tempdir(), "dest")
+  result <- .git_clone_repo(dest, git, paste0("--upload-pack=touch ", marker))
+  expect_false(isTRUE(result$ok))
+  expect_false(file.exists(marker))
+})

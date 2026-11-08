@@ -11,8 +11,7 @@
 #' @noRd
 .git_config_scoped <- function(repo_root, git_bin, key) {
   result <- tryCatch(
-    processx::run(
-      git_bin, c("-C", repo_root, "config", "--show-scope", "--get", key),
+    .git_exec(git_bin, c("-C", repo_root, "config", "--show-scope", "--get", key),
       error_on_status = FALSE, timeout = 5
     ),
     error = function(e) NULL
@@ -110,7 +109,7 @@
 
   scope_flag <- paste0("--", scope)
   name_args <- c("-C", repo_root, "config", scope_flag, "user.name", name)
-  name_result <- processx::run(git_bin, name_args, error_on_status = FALSE, timeout = 5)
+  name_result <- .git_exec(git_bin, name_args, error_on_status = FALSE, timeout = 5)
   if (!identical(name_result$status, 0L)) {
     return(list(
       ok = FALSE, code = "COMMAND_FAILED",
@@ -120,7 +119,7 @@
   }
 
   email_args <- c("-C", repo_root, "config", scope_flag, "user.email", email)
-  email_result <- processx::run(git_bin, email_args, error_on_status = FALSE, timeout = 5)
+  email_result <- .git_exec(git_bin, email_args, error_on_status = FALSE, timeout = 5)
   if (!identical(email_result$status, 0L)) {
     return(list(
       ok = FALSE, code = "COMMAND_FAILED",

@@ -16,7 +16,7 @@
 .run_git_raw <- function(git_bin, args, timeout = 15) {
   outfile <- tempfile("gitneighbr-git-")
   on.exit(unlink(outfile), add = TRUE)
-  processx::run(git_bin, args, error_on_status = TRUE, timeout = timeout, stdout = outfile)
+  .git_exec(git_bin, args, error_on_status = TRUE, timeout = timeout, stdout = outfile)
   size <- file.info(outfile)$size
   if (is.na(size) || size == 0L) {
     return(raw())
@@ -63,7 +63,7 @@
 #'   which have no single well-defined staged/unstaged split).
 #' @noRd
 .git_status_entries <- function(repo_root, git_bin) {
-  raw <- .run_git_raw(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "-z", "--branch"))
+  raw <- .run_git_raw(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"))
   fields <- .split_nul(raw)
 
   entries <- list()
@@ -326,9 +326,7 @@
   # Windows builds of Git) to render a "diff against nothing" header without
   # ever opening it. base::nullfile() returns "NUL" on Windows, which Git
   # does not special-case the same way, producing a malformed diff.
-  result <- processx::run(
-    git_bin,
-    c("-C", repo_root, "diff", "--no-index", "--", "/dev/null", path),
+  result <- .git_exec(git_bin, c("-C", repo_root, "diff", "--no-index", "--", "/dev/null", path),
     error_on_status = FALSE, timeout = 15
   )
   result$stdout
@@ -339,9 +337,7 @@
 .diff_tracked_text <- function(repo_root, git_bin, path, old_path, unborn) {
   base_ref <- if (isTRUE(unborn)) .git_empty_tree_sha else "HEAD"
   pathspecs <- unique(c(old_path, path))
-  result <- processx::run(
-    git_bin,
-    c("-C", repo_root, "diff", base_ref, "-M", "--", pathspecs),
+  result <- .git_exec(git_bin, c("-C", repo_root, "diff", base_ref, "-M", "--", pathspecs),
     error_on_status = FALSE, timeout = 15
   )
   result$stdout

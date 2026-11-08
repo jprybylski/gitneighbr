@@ -76,8 +76,7 @@
 .git_in_progress_operation <- function(repo_root, git_bin) {
   git_path <- function(name) {
     result <- tryCatch(
-      processx::run(
-        git_bin, c("-C", repo_root, "rev-parse", "--git-path", name),
+      .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--git-path", name),
         error_on_status = FALSE, timeout = 5
       ),
       error = function(e) NULL
@@ -117,8 +116,7 @@
 #' @noRd
 .has_ignored_files <- function(repo_root, git_bin) {
   result <- tryCatch(
-    processx::run(
-      git_bin, c("-C", repo_root, "status", "--porcelain=v2", "--ignored=matching"),
+    .git_exec(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "--ignored=matching"),
       error_on_status = FALSE, timeout = 15
     ),
     error = function(e) NULL
@@ -134,8 +132,7 @@
 #' @noRd
 .commit_signing_enabled <- function(repo_root, git_bin) {
   result <- tryCatch(
-    processx::run(
-      git_bin, c("-C", repo_root, "config", "--get", "commit.gpgsign"),
+    .git_exec(git_bin, c("-C", repo_root, "config", "--get", "commit.gpgsign"),
       error_on_status = FALSE, timeout = 5
     ),
     error = function(e) NULL
@@ -159,8 +156,7 @@
     }
   }
   result <- tryCatch(
-    processx::run(
-      git_bin, c("-C", repo_root, "config", "--get", "filter.lfs.clean"),
+    .git_exec(git_bin, c("-C", repo_root, "config", "--get", "filter.lfs.clean"),
       error_on_status = FALSE, timeout = 5
     ),
     error = function(e) NULL
@@ -178,8 +174,7 @@
 #' @noRd
 .days_since_last_commit <- function(repo_root, git_bin) {
   result <- tryCatch(
-    processx::run(
-      git_bin, c("-C", repo_root, "log", "-1", "--format=%ct"),
+    .git_exec(git_bin, c("-C", repo_root, "log", "-1", "--format=%ct"),
       error_on_status = FALSE, timeout = 5
     ),
     error = function(e) NULL
@@ -202,8 +197,7 @@
 #' @noRd
 .git_tags_at_head <- function(repo_root, git_bin) {
   result <- tryCatch(
-    processx::run(
-      git_bin, c("-C", repo_root, "tag", "--points-at", "HEAD"),
+    .git_exec(git_bin, c("-C", repo_root, "tag", "--points-at", "HEAD"),
       error_on_status = FALSE, timeout = 5
     ),
     error = function(e) NULL
@@ -319,10 +313,22 @@
   # haven't run). `.git_status()` uses `error_on_status = TRUE` and would
   # throw for a non-repo path, so repo-ness is checked first; `NULL` here
   # is exactly what `.primary_state()` reads as `NOT_REPOSITORY`.
-  status <- if (git_ok && identical(.git_repo_kind(repo_root, git_bin), "worktree")) {
+  managed <- isTRUE(session_state$managed)
+  features <- session_state$features %||% .MANAGED_FEATURES
+  # A managed session works only on its exact folder and only when the
+  # repository's own settings are supported (see `.managed_repo_check()`).
+  check <- if (managed && git_ok) .managed_repo_check(repo_root, git_bin) else NULL
+  is_worktree <- if (managed) identical(check$state, "worktree") else identical(.git_repo_kind(repo_root, git_bin), "worktree")
+  status <- if (git_ok && is_worktree) {
     .git_status(repo_root, git_bin)
   } else {
     NULL
+  }
+  # The commit the user is looking at; a snapshot is only saved on top of
+  # this exact commit (see `.git_commit_selected(expected_head =)`).
+  head_sha <- if (git_ok && !is.null(status)) {
+    head <- .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--verify", "-q", "HEAD"), error_on_status = FALSE, timeout = 5)
+    if (identical(head$status, 0L)) trimws(head$stdout) else ""
   }
   notices <- if (git_ok && !is.null(status)) {
     .status_notices(repo_root, git_bin, status, session_state, show_ignored = show_ignored)
@@ -330,6 +336,9 @@
     list()
   }
   state <- .primary_state(status, git_ok, auth_required = isTRUE(session_state$auth_required))
+  if (!is.null(check) && check$state %in% c("enclosing_repository", "unsupported")) {
+    state <- if (identical(check$state, "unsupported")) "UNSUPPORTED_REPOSITORY" else "ENCLOSING_REPOSITORY"
+  }
   in_progress_operation <- if (git_ok && !is.null(status)) {
     .git_in_progress_operation(repo_root, git_bin)
   } else {
@@ -337,7 +346,13 @@
   }
 
   policy <- .read_repo_policy(repo_root)
-  github_info <- .github_api_status(repo_root, git_bin, session_state = session_state, policy = policy)
+  # Without the `github` feature nothing here may start `gh` or call the
+  # GitHub API: a status poll must cause no network traffic.
+  github_info <- if ("github" %in% features) {
+    .github_api_status(repo_root, git_bin, session_state = session_state, policy = policy)
+  } else {
+    .github_status_off()
+  }
   is_protected <- .is_branch_protected(status$branch, policy = policy, github_protected = github_info$branch_protected)
 
   capabilities <- list(
@@ -352,10 +367,18 @@
   )
 
   data <- list(
-    repository = list(root_display = fs::path_file(repo_root)),
+    repository = list(
+      root_display = fs::path_file(repo_root),
+      check = if (!is.null(check) && !identical(check$state, "worktree")) check
+    ),
+    managed = managed,
+    features = as.list(features),
+    layout = .policy_layout(session_state$launcher_policy, repo_root),
+    remote = if (managed && "remote" %in% features) .managed_remote_status(repo_root, git_bin, session_state, status),
     primary_state = state,
     upstream = status$upstream,
     branch = status$branch,
+    head = head_sha,
     ahead = status$ahead %||% 0L,
     behind = status$behind %||% 0L,
     staged_count = status$staged_count %||% 0L,
