@@ -1,4 +1,4 @@
-# gitneighbr (development version)
+# gitneighbr 0.2.0
 
 ## Managed (launcher) mode
 
