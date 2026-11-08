@@ -15,10 +15,14 @@
   testthat::skip_on_cran()
   root <- testthat::test_path("..", "..")
   port <- gitneighbr:::.find_free_port()
-  expr <- sprintf(
-    "pkgload::load_all(%s, quiet = TRUE, export_all = FALSE); source(%s)",
-    deparse(normalizePath(root)), deparse(.serve_script())
-  )
+  # From a source tree (devtools::test) load it; under R CMD check the tests
+  # run against the installed package, so use that library instead.
+  loader <- if (file.exists(file.path(root, "DESCRIPTION")) && dir.exists(file.path(root, "R"))) {
+    sprintf("pkgload::load_all(%s, quiet = TRUE, export_all = FALSE)", deparse(normalizePath(root)))
+  } else {
+    sprintf(".libPaths(%s); library(gitneighbr)", paste(deparse(.libPaths()), collapse = ""))
+  }
+  expr <- sprintf("%s; source(%s)", loader, deparse(.serve_script()))
   proc <- processx::process$new(
     file.path(R.home("bin"), "Rscript"),
     c(

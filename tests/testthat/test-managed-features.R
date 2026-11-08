@@ -6,7 +6,7 @@ test_that("every route of a disabled feature is refused before doing anything", 
   api <- .test_managed_api(repo$dir, features = "local")
   version <- .api_version(api)
   for (path in names(.ROUTE_FEATURES)) {
-    method <- if (path %in% c("api/v1/github/status", "api/v1/github/releases", "api/v1/credential-diagnosis")) "get" else "post"
+    method <- if (path %in% c("api/v1/github/status", "api/v1/github/releases", "api/v1/credential-diagnosis", "api/v1/send/preview", "api/v1/receive/preview")) "get" else "post"
     resp <- .api_req(
       api, paste0("/", path),
       method = method, headers = .api_auth(api),
