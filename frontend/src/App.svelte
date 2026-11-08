@@ -1592,10 +1592,14 @@
       <dl>
         <dt>Not yet in a snapshot</dt>
         <dd>{status.staged_count + status.unstaged_count + status.untracked_count}</dd>
-        <dt>Saved, not yet sent</dt>
-        <dd>{status.ahead}</dd>
-        <dt>Waiting on GitHub</dt>
-        <dd>{status.behind}</dd>
+        <!-- A managed session sends only when the launcher turns sending on, and
+             to "the shared copy", which may be any HTTPS Git server. -->
+        {#if !status.managed || feat("remote")}
+          <dt>Saved, not yet sent</dt>
+          <dd>{status.ahead}</dd>
+          <dt>{status.managed ? "Waiting on the shared copy" : "Waiting on GitHub"}</dt>
+          <dd>{status.behind}</dd>
+        {/if}
         {#if status.conflicted_count > 0}
           <dt>Conflicted</dt>
           <dd>{status.conflicted_count}</dd>
