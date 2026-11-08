@@ -96,9 +96,11 @@
 #'   such as `HOME`, `PATH` and the locale) to pass to Git unchanged.
 #'
 #' @section Git in a managed session:
-#' Git runs with no system or user configuration, no inherited `GIT_*` or
-#' `SSH_*` variables, hooks, fsmonitor, pagers, signing and credential
-#' helpers switched off, external diff and text-conversion programs off,
+#' Git runs with none of the computer's or the user's own configuration (on
+#' Windows, gitneighbr supplies Git for Windows' defaults for line endings
+#' and certificate checks instead), no inherited `GIT_*` or `SSH_*`
+#' variables, hooks, fsmonitor, pagers, signing and credential helpers
+#' switched off, external diff and text-conversion programs off,
 #' and HTTPS as the only transport. A repository whose own settings or
 #' attributes need anything else (a filter such as Git LFS, an include, an
 #' unknown setting), that lives inside another repository, or that reads

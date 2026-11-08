@@ -252,3 +252,45 @@ test_that(".managed_repo_check() refuses bare repositories, unreadable .git fold
   expect_identical(check$code, "FILTER_ATTRIBUTE")
   expect_identical(check$detail, ".git/info/attributes")
 })
+
+test_that("a managed Git uses its own system configuration: Git for Windows' defaults on Windows only", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  repo <- .new_test_repo()
+  get <- function(managed, key) {
+    trimws(.git_exec(managed, c("-C", repo$dir, "config", "--get", key), error_on_status = FALSE)$stdout)
+  }
+  config <- withr::local_tempfile(fileext = ".gitconfig")
+  windows <- .managed_git(git, config, windows = TRUE)
+  other <- .managed_git(git, config, windows = FALSE)
+  expect_identical(get(windows, "core.autocrlf"), "true")
+  expect_identical(get(windows, "http.sslBackend"), "schannel")
+  expect_identical(get(other, "core.autocrlf"), "")
+  # Only those settings: no LFS filter, credential helper or text conversion.
+  listed <- .git_exec(windows, c("config", "--system", "--list"))$stdout
+  expect_false(grepl("filter|credential|textconv", listed))
+  # The repository's own setting wins.
+  repo$run("config", "core.autocrlf", "false")
+  expect_identical(get(windows, "core.autocrlf"), "false")
+})
+
+test_that("files another Windows Git checked out with CRLF line endings aren't shown as changed", {
+  repo <- .new_test_repo()
+  repo$run("config", "core.autocrlf", "false")
+  writeBin(charToRaw("one\ntwo\n"), file.path(repo$dir, "notes.txt"))
+  repo$run("add", "notes.txt")
+  repo$run("commit", "-q", "-m", "LF in the repository")
+  repo$run("config", "--unset", "core.autocrlf")
+  # Check it out the way Git for Windows does by default (CRLF on disk), then
+  # touch it (a sync tool, a copy): Git has to read it again to compare.
+  unlink(file.path(repo$dir, "notes.txt"))
+  repo$run("-c", "core.autocrlf=true", "checkout", "--", "notes.txt")
+  expect_identical(readBin(file.path(repo$dir, "notes.txt"), "raw", 20), charToRaw("one\r\ntwo\r\n"))
+  Sys.setFileTime(file.path(repo$dir, "notes.txt"), Sys.time() + 5)
+  config <- withr::local_tempfile(fileext = ".gitconfig")
+  changed <- function(managed) {
+    trimws(.git_exec(managed, c("-C", repo$dir, "status", "--porcelain"))$stdout)
+  }
+  expect_identical(changed(.managed_git(repo$git, config, windows = TRUE)), "")
+  expect_match(changed(.managed_git(repo$git, config, windows = FALSE)), "notes.txt", fixed = TRUE)
+})

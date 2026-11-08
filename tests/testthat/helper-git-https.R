@@ -60,8 +60,11 @@
 #' A Git config file that trusts `cert`
 #'
 #' Git reads backslashes in a config value as escapes, so a Windows path is
-#' written with forward slashes.
+#' written with forward slashes. On Windows a managed Git checks certificates
+#' with the Windows store (schannel), which can't trust a throwaway file, so
+#' the test server's sessions use OpenSSL with that file instead.
 #' @noRd
 .write_ca_config <- function(config, cert) {
-  writeLines(c("[http]", paste0("\tsslCAInfo = ", normalizePath(cert, winslash = "/"))), config)
+  backend <- if (.Platform$OS.type == "windows") "\tsslBackend = openssl"
+  writeLines(c("[http]", backend, paste0("\tsslCAInfo = ", normalizePath(cert, winslash = "/"))), config)
 }

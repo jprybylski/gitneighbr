@@ -167,10 +167,8 @@ test_that("Update previews incoming commits, refuses protected paths and local w
   processx::run(other$git, c("-C", other$dir, "push", "-q", remote$bare, "main"))
 
   repo <- .new_test_repo()
-  # This copy is checked out with the machine's Git, whose system settings a
-  # managed Git ignores; on Windows those turn on core.autocrlf, so the
-  # managed Git would see every checked-out file as changed. Fix it locally.
-  repo$run("config", "core.autocrlf", "false")
+  # Checked out with the machine's own Git (on Windows: CRLF line endings),
+  # then read by the managed Git, which must see the same clean files.
   processx::run(repo$git, c("-C", repo$dir, "fetch", "-q", remote$bare, "main"))
   repo$run("merge", "-q", "--ff-only", "FETCH_HEAD")
   policy <- list(schema_version = 1L, protected = list("runs/**"))

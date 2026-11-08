@@ -94,8 +94,15 @@ Git runs with:
 
 - a minimal environment: no inherited `GIT_*` or `SSH_*` variables; the
   launcher can name more variables with `--pass-env`;
-- no system or user configuration. `--git-config` is the only extra
-  configuration file, and the identity form writes the name and email there;
+- none of the computer's or the user's own Git configuration.
+  `--git-config` is the only extra configuration file, and the identity form
+  writes the name and email there. In place of the computer's system
+  configuration, gitneighbr supplies its own: empty, except on Windows, where
+  it keeps Git for Windows' defaults for line endings (`core.autocrlf`) and
+  certificate checks (the Windows certificate store). Otherwise a folder
+  checked out by another Windows Git tool would show every text file as
+  changed, and HTTPS could fail on networks that add their own certificates.
+  The repository's own settings and `--git-config` still take precedence;
 - hooks, templates, fsmonitor, pagers, editors, signing, credential helpers
   and askpass all switched off;
 - HTTPS as the only transport;
