@@ -144,12 +144,17 @@ test.describe("managed mode behind a path-prefix proxy", () => {
     }
     await expect(page.getByRole("button", { name: /^Remove / })).toHaveCount(0);
     await expect(page.getByText("Also send to GitHub")).toHaveCount(0);
+    // A managed page never talks about GitHub, and with sending off it has
+    // nothing "not yet sent".
+    await expect(page.getByText(/GitHub/)).toHaveCount(0);
+    await expect(page.getByText("Saved, not yet sent")).toHaveCount(0);
     await expect(page.getByText("Mark this snapshot as a version")).toHaveCount(0);
 
     await page.getByRole("checkbox", { name: "Include recipe/clean.json in the next snapshot" }).check();
     await page.getByLabel(/Summary/).fill("Add cleaning recipe");
     await page.getByRole("button", { name: /Save/ }).click();
     await expect(page.getByText(/Saved snapshot [0-9a-f]+/)).toBeVisible();
+    await expect(page.getByText(/GitHub/)).toHaveCount(0);
     await expect.poll(() => execFileSync("git", ["-C", study, "show", "--name-only", "--format=", "HEAD"]).toString().trim()).toBe("recipe/clean.json");
 
     const ignore = readFileSync(path.join(study, ".gitignore"), "utf-8");
