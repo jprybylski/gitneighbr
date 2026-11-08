@@ -6,6 +6,11 @@
 #' @noRd
 .MANAGED_FEATURES <- c("local", "remote", "tags", "restore", "trash", "clone", "github")
 
+#' A standalone session's features: everything, plus its own send/update
+#' routes (a managed session uses the preview-bound ones instead)
+#' @noRd
+.STANDALONE_FEATURES <- c(.MANAGED_FEATURES, "standalone")
+
 #' The header a launcher's proxy uses to pass the session token
 #' @noRd
 .MANAGED_TOKEN_HEADER <- "X-Gitneighbr-Token"
@@ -39,10 +44,11 @@
 #'
 #' `NULL` everywhere a managed value is absent means standalone behaviour.
 #' @noRd
-.managed_config <- function(shutdown_token = NULL, features = "local") {
+.managed_config <- function(shutdown_token = NULL, features = "local", policy = NULL) {
   config <- list(
     shutdown_token = shutdown_token,
     features = .parse_features(features),
+    policy = policy,
     control = new.env(parent = emptyenv())
   )
   config$control$stop_requested <- FALSE
@@ -80,6 +86,10 @@
 #'   repository's own, and where the identity form saves a name and email. A
 #'   launcher passes a file it owns, outside the folder. Without it a
 #'   temporary file is used and identity lasts for this session only.
+#' @param policy_file A launcher policy file (JSON, outside the folder): how
+#'   to group files, which paths no action may change, which need extra
+#'   review before sending, and suggested `.gitignore` rules to offer when
+#'   the folder is first set up. See `vignette("launcher")`.
 #' @param pass_env Names of environment variables (besides a small fixed set
 #'   such as `HOME`, `PATH` and the locale) to pass to Git unchanged.
 #'
@@ -95,7 +105,7 @@
 #' @export
 gitneighbr_serve <- function(repo, port, git, api_token, host = "127.0.0.1", base_path = "/",
                              shutdown_token = NULL, features = "local", git_config = NULL,
-                             pass_env = character()) {
+                             policy_file = NULL, pass_env = character()) {
   .assert_loopback_host(host)
   port <- suppressWarnings(as.integer(port))
   if (length(port) != 1L || is.na(port) || port < 1L || port > 65535L) {
@@ -131,7 +141,14 @@ gitneighbr_serve <- function(repo, port, git, api_token, host = "127.0.0.1", bas
     stop("`git_config` must be outside the folder being served.", call. = FALSE)
   }
   base_path <- .normalize_base_path(base_path)
-  managed <- .managed_config(shutdown_token = shutdown_token, features = features)
+  policy <- NULL
+  if (!is.null(policy_file)) {
+    if (startsWith(paste0(.real_path(policy_file)), paste0(repo_root, "/"))) {
+      stop("`policy_file` must be outside the folder being served.", call. = FALSE)
+    }
+    policy <- .read_launcher_policy(policy_file)
+  }
+  managed <- .managed_config(shutdown_token = shutdown_token, features = features, policy = policy)
   git_bin <- .managed_git(git, git_config, pass_env = pass_env, remote = "remote" %in% managed$features)
   api <- .build_api(repo_root, git_bin, api_token, port, base_path = base_path, managed = managed)
   .serve_run(api, host, port, base_path, managed$control)
@@ -186,13 +203,20 @@ gitneighbr_serve <- function(repo, port, git, api_token, host = "127.0.0.1", bas
 #' The features each route needs (routes not listed need `local`)
 #' @noRd
 .ROUTE_FEATURES <- list(
-  "api/v1/refresh-remote" = "remote",
-  "api/v1/push" = "remote",
-  "api/v1/update" = "remote",
-  "api/v1/publish" = "remote",
+  "api/v1/refresh-remote" = c("remote", "standalone"),
+  "api/v1/push" = c("remote", "standalone"),
+  "api/v1/update" = c("remote", "standalone"),
+  "api/v1/publish" = c("remote", "standalone"),
+  "api/v1/remote/check" = "remote",
+  "api/v1/remote/connect" = "remote",
+  "api/v1/remote/token" = "remote",
+  "api/v1/send/preview" = "remote",
+  "api/v1/send" = "remote",
+  "api/v1/receive/preview" = "remote",
+  "api/v1/receive" = "remote",
   "api/v1/credential-diagnosis" = "remote",
   "api/v1/tag" = "tags",
-  "api/v1/push-tag" = c("tags", "remote"),
+  "api/v1/push-tag" = c("tags", "remote", "standalone"),
   "api/v1/restore" = "restore",
   "api/v1/trash" = "trash",
   "api/v1/clone" = c("clone", "remote"),

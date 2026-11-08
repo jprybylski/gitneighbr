@@ -150,9 +150,24 @@
     }
   }
 
-  features <- if (is.null(managed)) .MANAGED_FEATURES else managed$features
+  features <- if (is.null(managed)) .STANDALONE_FEATURES else managed$features
   session_state$features <- features
   session_state$managed <- !is.null(managed)
+  # A launcher's policy (groups, protected paths, review labels, ignore
+  # template). It comes from outside the repository; NULL without one.
+  launcher_policy <- managed$policy
+  session_state$launcher_policy <- launcher_policy
+  max_diff_bytes <- launcher_policy$max_diff_bytes %||% getOption("gitneighbr.diff_max_bytes", 200000L)
+
+  # Working-tree-changing actions never touch a protected path.
+  refuse_protected <- function(paths, response) {
+    hit <- .protected_path(paths, launcher_policy)
+    if (is.null(hit)) {
+      return(NULL)
+    }
+    response$status <- 403L
+    .error_envelope("PATH_PROTECTED", paste0("'", hit, "' is protected here and can't be changed by version history."), recoverable = FALSE)
+  }
 
   # Every route goes through this: Host, cross-site and token checks run
   # before the handler (which repeats the Host and token checks itself; that
@@ -277,6 +292,103 @@
     }
     api
   }
+  # Send and Update with a full, preview-bound history check (see
+  # R/managed-remote.R). Each mutation is gated like every other one: an
+  # existing supported repository, the client's current status_version, and
+  # the single mutation lock.
+  remote_mutation <- function(request, response, action, needs_fresh = TRUE) {
+    if (!.git_available(git_bin)) {
+      return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+    }
+    not_a_repo <- require_existing_repo()
+    if (!is.null(not_a_repo)) {
+      return(not_a_repo)
+    }
+    body <- parse_body(request)
+    if (is.null(body)) {
+      return(.error_envelope("COMMAND_FAILED", "The request could not be understood.", recoverable = FALSE))
+    }
+    if (needs_fresh) {
+      stale <- require_fresh(body, response)
+      if (!is.null(stale)) {
+        return(stale)
+      }
+    }
+    operation_id <- acquire_mutation_lock(response)
+    if (is.null(operation_id)) {
+      response$status <- 423L
+      return(.error_envelope("OPERATION_IN_PROGRESS", "Another repository action is already running. Wait for it to finish and try again."))
+    }
+    on.exit(release_mutation_lock(), add = TRUE)
+    result <- action(body)
+    note_auth_result(result)
+    payload <- .status_payload(repo_root, git_bin, session_state)
+    if (!isTRUE(result$ok)) {
+      return(.error_envelope(
+        result$code, result$message,
+        recoverable = result$recoverable %||% TRUE, status_version = payload$version,
+        advanced = result$advanced
+      ))
+    }
+    .ok_envelope(result[setdiff(names(result), "ok")], status_version = payload$version)
+  }
+  remote_read <- function(action) {
+    if (!.git_available(git_bin)) {
+      return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
+    }
+    not_a_repo <- require_existing_repo()
+    if (!is.null(not_a_repo)) {
+      return(not_a_repo)
+    }
+    result <- action()
+    if (!isTRUE(result$ok)) {
+      return(.error_envelope(result$code, result$message, recoverable = result$recoverable %||% TRUE))
+    }
+    .ok_envelope(result[setdiff(names(result), "ok")])
+  }
+  remote_routes <- function(api) {
+    api |>
+      route_post("api/v1/remote/check", function(request, response) {
+        remote_mutation(request, response, function(body) .managed_remote_check(repo_root, git_bin, session_state))
+      }) |>
+      route_post("api/v1/remote/connect", function(request, response) {
+        remote_mutation(request, response, function(body) .managed_remote_connect(repo_root, git_bin, body$url))
+      }) |>
+      route_post("api/v1/remote/token", function(request, response) {
+        # Held in memory for this session only; never echoed back. An empty
+        # token forgets it.
+        body <- parse_body(request)
+        token_value <- as.character(body$token %||% "")[[1]]
+        if (!nzchar(token_value)) {
+          session_state$remote_auth <- NULL
+          return(.ok_envelope(list(has_token = FALSE)))
+        }
+        dest <- .managed_destination(repo_root, git_bin)
+        if (!isTRUE(dest$ok)) {
+          return(.error_envelope(dest$code, dest$message, recoverable = TRUE))
+        }
+        username <- as.character(body$username %||% "x-access-token")[[1]]
+        if (grepl("[:\\s]", username, perl = TRUE) || grepl("[\\s]", token_value, perl = TRUE) || nchar(token_value) > 4096L) {
+          return(.error_envelope("INVALID_TOKEN", "That doesn't look like an access token.", recoverable = TRUE))
+        }
+        session_state$remote_auth <- list(host = dest$host, username = if (nzchar(username)) username else "x-access-token", token = token_value)
+        session_state$auth_required <- FALSE
+        .ok_envelope(list(has_token = TRUE, host = dest$host))
+      }) |>
+      route_get("api/v1/send/preview", function(request) {
+        remote_read(function() .managed_send_preview(repo_root, git_bin, session_state))
+      }) |>
+      route_post("api/v1/send", function(request, response) {
+        remote_mutation(request, response, function(body) .managed_send(repo_root, git_bin, session_state, body))
+      }) |>
+      route_get("api/v1/receive/preview", function(request) {
+        remote_read(function() .managed_receive_preview(repo_root, git_bin, session_state))
+      }) |>
+      route_post("api/v1/receive", function(request, response) {
+        remote_mutation(request, response, function(body) .managed_receive(repo_root, git_bin, session_state, body))
+      })
+  }
+
   # The shutdown route exists only for a managed session started with a
   # shutdown token. It needs that second token as well as the session one:
   # the proxy injects the session token into every request a page makes,
@@ -313,6 +425,7 @@
   plumber2::api(host = "127.0.0.1") |>
     statics() |>
     shutdown_route() |>
+    remote_routes() |>
     route_get("api/v1/health", function(request) {
       validate_host(request)
       list(ok = TRUE, data = list(
@@ -341,7 +454,8 @@
       if (!is.null(not_a_repo)) {
         return(not_a_repo)
       }
-      .ok_envelope(list(changes = .git_changes(repo_root, git_bin)))
+      changes <- .git_changes(repo_root, git_bin, max_bytes = max_diff_bytes)
+      .ok_envelope(list(changes = .annotate_changes(changes, launcher_policy)))
     }) |>
     route_get("api/v1/diff", function(request) {
       validate_host(request)
@@ -369,7 +483,7 @@
         offset_lines <- 0L
       }
 
-      result <- .git_diff(repo_root, git_bin, path, offset_lines = offset_lines)
+      result <- .git_diff(repo_root, git_bin, path, offset_lines = offset_lines, max_bytes = max_diff_bytes)
       if (!result$found) {
         return(.error_envelope("COMMAND_FAILED", "That path has no pending changes to show."))
       }
@@ -487,8 +601,11 @@
       }
       on.exit(release_mutation_lock(), add = TRUE)
 
+      # `require_fresh()` just confirmed the client saw the current status,
+      # whose `head` is the commit this snapshot must go on top of.
       result <- .git_commit_selected(
         repo_root, git_bin,
+        expected_head = session_state$last_snapshot$head,
         selected_paths = body$paths,
         summary = body$summary,
         details = body$details
@@ -786,6 +903,10 @@
       }
       on.exit(release_mutation_lock(), add = TRUE)
 
+      protected <- refuse_protected(body$path, response)
+      if (!is.null(protected)) {
+        return(protected)
+      }
       result <- .git_restore_tracked_file(repo_root, git_bin, path = body$path)
       payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
@@ -836,6 +957,10 @@
           recoverable = FALSE
         ))
       }
+      protected <- refuse_protected(body$path, response)
+      if (!is.null(protected)) {
+        return(protected)
+      }
       result <- .git_trash_untracked_file(repo_root, git_bin, path = body$path)
       payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
@@ -878,6 +1003,10 @@
       }
       on.exit(release_mutation_lock(), add = TRUE)
 
+      protected <- refuse_protected(".gitignore", response)
+      if (!is.null(protected)) {
+        return(protected)
+      }
       result <- .git_ignore_path(repo_root, git_bin, path = body$path)
       payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
@@ -928,7 +1057,26 @@
           ))
         }
       }
+      # Suggested ignore rules the user kept, written only as a new
+      # .gitignore (never over an existing one), and checked before Git is
+      # set up so a refusal leaves the folder untouched.
+      ignore_rules <- unlist(body$ignore_rules %||% list())
+      if (length(ignore_rules) > 0L) {
+        if (is.null(launcher_policy)) {
+          return(.error_envelope("COMMAND_FAILED", "There are no suggested ignore rules here.", recoverable = FALSE))
+        }
+        offered <- vapply(launcher_policy$ignore_template, `[[`, character(1), "rule")
+        if (!all(ignore_rules %in% offered)) {
+          return(.error_envelope("COMMAND_FAILED", "Only the suggested ignore rules can be added here.", recoverable = FALSE))
+        }
+        if (file.exists(file.path(repo_root, ".gitignore"))) {
+          return(.error_envelope("GITIGNORE_EXISTS", "This folder already has a .gitignore; it was left unchanged.", recoverable = TRUE))
+        }
+      }
       result <- .git_init_workspace(repo_root, git_bin)
+      if (isTRUE(result$ok) && length(ignore_rules) > 0L) {
+        result <- .write_ignore_template(repo_root, launcher_policy, ignore_rules)
+      }
       payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
         return(.error_envelope(
@@ -937,7 +1085,7 @@
           advanced = result$advanced
         ))
       }
-      .ok_envelope(list(), status_version = payload$version)
+      .ok_envelope(list(gitignore_written = isTRUE(result$written)), status_version = payload$version)
     }) |>
     route_post("api/v1/clone", function(request, response) {
       validate_host(request)

@@ -38,37 +38,37 @@
   unique(c(entry$path, entry$old_path))
 }
 
-#' Stage exactly the user's selected paths and create one commit
+#' Create one commit from exactly the user's selected paths
 #'
-#' Implements the staging invariants from spec Sec 13.4: the pre-operation
-#' index is snapshotted with `git write-tree` (a pure index-read, no
-#' filesystem side effects), the desired staged set is built explicitly
-#' from `selected_paths` rather than trusting whatever happened to already
-#' be staged, and the snapshot is restored with `git read-tree` (index-only,
-#' never touches the working tree) if anything goes wrong before Git itself
-#' commits.
+#' The commit is built on a temporary index (`GIT_INDEX_FILE`) that starts
+#' from `HEAD` and gets only the selected paths (and a selected rename's old
+#' path), so whatever else the user had staged -- other files, or partial
+#' staging -- is never included and never disturbed. Afterwards only the
+#' selected paths are refreshed in the real index to match the new commit.
 #'
-#' Any path already staged (from before `gitneighbr` was even opened) that
-#' is not part of the current selection is explicitly unstaged first with
-#' `git reset -- <path>`, so a previously staged-but-deselected path can
-#' never leak into the new commit. `git add -- <path>` both stages ordinary
-#' additions/modifications and stages a deletion for a tracked path missing
-#' from the working tree, so one code path covers new, changed, deleted,
-#' and renamed entries.
+#' A standalone session commits with `git commit`, so the user's own hooks
+#' and signing still apply. A managed session uses `write-tree`,
+#' `commit-tree` and `update-ref HEAD <new> <old>`: if `HEAD` moved after the
+#' list was shown, the update is refused and nothing changes.
+#'
+#' Every selected path is re-checked at commit time: it must still be a
+#' pending change in a fresh status read, stay inside the repository after
+#' resolving any linked folders, and not be inside `.git/`.
 #'
 #' @param selected_paths Character vector of repository-relative paths the
 #'   user selected, matched against a fresh `.git_status_entries()` read of
 #'   the repository (never trusted at face value: a path that no longer
 #'   matches a real pending change is treated as `STATE_CHANGED`, and a
-#'   selection touching a conflicted path -- or a repository with *any*
-#'   unresolved conflicts, which blocks committing regardless of selection
-#'   -- is rejected as `CONFLICTS_PRESENT`).
+#'   repository with *any* unresolved conflicts is rejected as
+#'   `CONFLICTS_PRESENT`).
 #' @param summary Required 3-72 character commit subject.
 #' @param details Optional longer commit body.
+#' @param expected_head If not `NULL`, the commit `HEAD` must still be at
+#'   (`""` for an unborn branch); otherwise `STATE_CHANGED`.
 #' @return A list. On success: `ok = TRUE`, `sha`, `summary`. On failure:
 #'   `ok = FALSE`, `code`, `message`, `recoverable`.
 #' @noRd
-.git_commit_selected <- function(repo_root, git_bin, selected_paths, summary, details = NULL) {
+.git_commit_selected <- function(repo_root, git_bin, selected_paths, summary, details = NULL, expected_head = NULL) {
   selected_paths <- unique(as.character(selected_paths %||% character()))
   summary <- if (is.null(summary)) "" else trimws(as.character(summary)[[1]])
   details <- if (is.null(details) || length(details) != 1L || !nzchar(trimws(details))) NULL else details
@@ -107,86 +107,121 @@
     ))
   }
 
-  # Only the current path is ever `git add`-able: once a rename is index-
-  # recorded at all, its old path has no index entry left to reconcile, and
-  # `git add -- <old_path>` errors ("did not match any files"). The old
-  # path only matters for unstaging (below), where both sides must move
-  # together to fully revert to HEAD.
-  add_paths <- selected_paths
-  deselected_staged <- Filter(
-    function(e) isTRUE(e$staged) && !(e$path %in% selected_paths),
-    status_entries
-  )
-  reset_paths <- unique(unlist(lapply(deselected_staged, .commit_entry_paths)))
-
-  tree_args <- c("-C", repo_root, "write-tree")
-  tree_result <- .git_exec(git_bin, tree_args,
-    error_on_status = FALSE, timeout = 15
-  )
-  if (!identical(tree_result$status, 0L)) {
-    return(list(
-      ok = FALSE, code = "COMMAND_FAILED",
-      message = "Could not read the current index.", recoverable = TRUE,
-      advanced = .advanced_block(tree_args, tree_result)
-    ))
-  }
-  original_tree <- trimws(tree_result$stdout)
-
-  restore_index <- function() {
-    .git_exec(git_bin, c("-C", repo_root, "read-tree", original_tree), error_on_status = FALSE, timeout = 15)
-  }
-
-  if (length(reset_paths) > 0L) {
-    reset_args <- c("-C", repo_root, "reset", "--", reset_paths)
-    result <- .git_exec(git_bin, reset_args, error_on_status = FALSE, timeout = 15)
-    if (!identical(result$status, 0L)) {
-      restore_index()
+  # A selected rename brings its old path along, so the commit records the
+  # move rather than a copy.
+  commit_paths <- unique(unlist(lapply(by_path[selected_paths], .commit_entry_paths)))
+  for (path in commit_paths) {
+    if (!.commit_path_is_safe(repo_root, path)) {
       return(list(
-        ok = FALSE, code = "COMMAND_FAILED",
-        message = "Could not update the saved selection.", recoverable = TRUE,
-        advanced = .advanced_block(reset_args, result)
-      ))
-    }
-  }
-  if (length(add_paths) > 0L) {
-    add_args <- c("-C", repo_root, "add", "--", add_paths)
-    result <- .git_exec(git_bin, add_args, error_on_status = FALSE, timeout = 15)
-    if (!identical(result$status, 0L)) {
-      restore_index()
-      return(list(
-        ok = FALSE, code = "COMMAND_FAILED",
-        message = "Could not stage the selected files.", recoverable = TRUE,
-        advanced = .advanced_block(add_args, result)
+        ok = FALSE, code = "PATH_REJECTED",
+        message = "A selected file is outside this folder or inside Git's own data, so nothing was saved.",
+        recoverable = FALSE
       ))
     }
   }
 
-  empty_check <- .git_exec(git_bin, c("-C", repo_root, "diff", "--cached", "--quiet"), error_on_status = FALSE, timeout = 15)
-  if (identical(empty_check$status, 0L)) {
-    restore_index()
+  head <- .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--verify", "-q", "HEAD"), error_on_status = FALSE, timeout = 15)
+  old_head <- if (identical(head$status, 0L)) trimws(head$stdout) else ""
+  if (!is.null(expected_head) && !identical(old_head, expected_head)) {
     return(list(
-      ok = FALSE, code = "EMPTY_COMMIT",
-      message = "The selected files have no changes to save.", recoverable = TRUE
+      ok = FALSE, code = "STATE_CHANGED",
+      message = "The repository changed since this list was shown. Refresh and try again.",
+      recoverable = TRUE
     ))
   }
 
-  msg_file <- tempfile("gitneighbr-commit-")
-  on.exit(unlink(msg_file), add = TRUE)
+  index_file <- tempfile("gitneighbr-index-")
+  on.exit(unlink(index_file), add = TRUE)
+  index_env <- c(GIT_INDEX_FILE = index_file)
+  step <- function(args, message, timeout = 15) {
+    result <- .git_exec(git_bin, c("-C", repo_root, args), error_on_status = FALSE, timeout = timeout, env = index_env)
+    if (!identical(result$status, 0L)) {
+      stop(structure(
+        class = c("gitneighbr_commit_step", "error", "condition"),
+        list(message = message, call = NULL, args = c("-C", repo_root, args), result = result)
+      ))
+    }
+    result
+  }
+
+  message_file <- tempfile("gitneighbr-commit-")
+  on.exit(unlink(message_file), add = TRUE)
   message_text <- if (is.null(details)) summary else paste0(summary, "\n\n", details)
-  writeLines(message_text, msg_file, useBytes = TRUE)
-  Sys.chmod(msg_file, "0600")
+  writeLines(message_text, message_file, useBytes = TRUE)
+  Sys.chmod(message_file, "0600")
 
-  commit_args <- c("-C", repo_root, "commit", "-F", msg_file)
-  commit_result <- .git_exec(git_bin, commit_args, error_on_status = FALSE, timeout = 30)
-  if (!identical(commit_result$status, 0L)) {
-    restore_index()
-    return(list(
-      ok = FALSE, code = .classify_commit_failure(commit_result$stderr),
-      message = "Git rejected this snapshot.", recoverable = TRUE,
-      advanced = .advanced_block(commit_args, commit_result)
-    ))
+  outcome <- tryCatch(
+    {
+      step(if (nzchar(old_head)) c("read-tree", old_head) else c("read-tree", "--empty"), "Could not read the current snapshot.")
+      step(c("add", "-A", "--", commit_paths), "Could not stage the selected files.")
+      tree <- trimws(step("write-tree", "Could not record the selected files.")$stdout)
+      old_tree <- if (nzchar(old_head)) {
+        trimws(step(c("rev-parse", paste0(old_head, "^{tree}")), "Could not read the current snapshot.")$stdout)
+      } else {
+        ""
+      }
+      if (identical(tree, old_tree)) {
+        list(
+          ok = FALSE, code = "EMPTY_COMMIT",
+          message = "The selected files have no changes to save.", recoverable = TRUE
+        )
+      } else if (.is_managed_git(git_bin)) {
+        parent <- if (nzchar(old_head)) c("-p", old_head)
+        sha <- trimws(step(c("commit-tree", tree, parent, "-F", message_file), "Git rejected this snapshot.", timeout = 30)$stdout)
+        moved <- .git_exec(
+          git_bin, c("-C", repo_root, "update-ref", "-m", paste("commit:", summary), "HEAD", sha, old_head),
+          error_on_status = FALSE, timeout = 15
+        )
+        if (!identical(moved$status, 0L)) {
+          list(
+            ok = FALSE, code = "STATE_CHANGED",
+            message = "The repository changed while saving. Nothing was saved; refresh and try again.",
+            recoverable = TRUE
+          )
+        } else {
+          list(ok = TRUE, sha = sha)
+        }
+      } else {
+        step(c("commit", "-q", "-F", message_file), "Git rejected this snapshot.", timeout = 30)
+        list(ok = TRUE, sha = trimws(step(c("rev-parse", "HEAD"), "Could not read the new snapshot.")$stdout))
+      }
+    },
+    gitneighbr_commit_step = function(e) {
+      code <- if (identical(e$message, "Git rejected this snapshot.")) .classify_commit_failure(e$result$stderr) else "COMMAND_FAILED"
+      list(ok = FALSE, code = code, message = e$message, recoverable = TRUE, advanced = .advanced_block(e$args, e$result))
+    }
+  )
+  if (!isTRUE(outcome$ok)) {
+    return(outcome)
   }
 
-  sha <- trimws(.git_exec(git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"), error_on_status = TRUE, timeout = 15)$stdout)
-  list(ok = TRUE, sha = sha, summary = summary)
+  # Bring only the committed paths in the real index up to the new commit;
+  # anything else the user had staged stays exactly as it was.
+  .git_exec(git_bin, c("-C", repo_root, "reset", "-q", "--", commit_paths), error_on_status = FALSE, timeout = 15)
+  short <- .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--short", outcome$sha), error_on_status = FALSE, timeout = 15)
+  list(ok = TRUE, sha = trimws(short$stdout), summary = summary)
+}
+
+#' May this path be committed?
+#'
+#' Lexically inside the repository, not Git's own data, and (when its folder
+#' exists) inside the repository after resolving linked folders.
+#' @noRd
+.commit_path_is_safe <- function(repo_root, path) {
+  if (!.validate_repo_relative_path(repo_root, path)) {
+    return(FALSE)
+  }
+  first <- strsplit(gsub("\\\\", "/", path), "/", fixed = TRUE)[[1]][[1]]
+  if (identical(tolower(first), ".git")) {
+    return(FALSE)
+  }
+  parent <- dirname(file.path(repo_root, path))
+  if (dir.exists(parent)) {
+    root <- paste0(.real_path(repo_root), "/")
+    real_parent <- paste0(.real_path(parent), "/")
+    if (!startsWith(real_parent, root)) {
+      return(FALSE)
+    }
+  }
+  TRUE
 }

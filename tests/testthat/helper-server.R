@@ -69,11 +69,14 @@
 
 #' An in-process managed session: managed Git, launcher token header
 #' @noRd
-.test_managed_api <- function(repo_root, features = "local", env = parent.frame(), ...) {
+.test_managed_api <- function(repo_root, features = "local", policy = NULL, env = parent.frame(), ...) {
   git <- unname(Sys.which("git"))
   testthat::skip_if(!nzchar(git), "git not available")
   config <- withr::local_tempfile(.local_envir = env, fileext = ".gitconfig")
-  managed <- gitneighbr:::.managed_config(features = features)
+  if (!is.null(policy)) {
+    policy <- gitneighbr:::.validate_launcher_policy(policy)
+  }
+  managed <- gitneighbr:::.managed_config(features = features, policy = policy)
   git_bin <- gitneighbr:::.managed_git(git, config, remote = "remote" %in% managed$features, ...)
   .test_api(repo_root, git_bin, managed = managed, env = env)
 }

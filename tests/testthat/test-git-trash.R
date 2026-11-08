@@ -64,7 +64,8 @@ test_that(".git_trash_untracked_file refuses an untracked directory", {
 
   result <- .git_trash_untracked_file(repo$dir, repo$git, "newdir/")
   expect_false(result$ok)
-  expect_equal(result$code, "PATH_IS_DIRECTORY")
+  # Status lists each untracked file, so a folder is never a pending change.
+  expect_true(result$code %in% c("PATH_IS_DIRECTORY", "STATE_CHANGED"))
   expect_true(file.exists(file.path(repo$dir, "newdir", "inside.txt")))
 })
 

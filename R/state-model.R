@@ -324,6 +324,12 @@
   } else {
     NULL
   }
+  # The commit the user is looking at; a snapshot is only saved on top of
+  # this exact commit (see `.git_commit_selected(expected_head =)`).
+  head_sha <- if (git_ok && !is.null(status)) {
+    head <- .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--verify", "-q", "HEAD"), error_on_status = FALSE, timeout = 5)
+    if (identical(head$status, 0L)) trimws(head$stdout) else ""
+  }
   notices <- if (git_ok && !is.null(status)) {
     .status_notices(repo_root, git_bin, status, session_state, show_ignored = show_ignored)
   } else {
@@ -367,9 +373,12 @@
     ),
     managed = managed,
     features = as.list(features),
+    layout = .policy_layout(session_state$launcher_policy, repo_root),
+    remote = if (managed && "remote" %in% features) .managed_remote_status(repo_root, git_bin, session_state, status),
     primary_state = state,
     upstream = status$upstream,
     branch = status$branch,
+    head = head_sha,
     ahead = status$ahead %||% 0L,
     behind = status$behind %||% 0L,
     staged_count = status$staged_count %||% 0L,

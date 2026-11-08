@@ -44,7 +44,7 @@
 #'   `has_changes`, `detached`, `unborn`.
 #' @noRd
 .git_status <- function(repo_root, git_bin) {
-  result <- .git_exec(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "--branch"),
+  result <- .git_exec(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "--branch", "--untracked-files=all"),
     error_on_status = TRUE,
     timeout = 15
   )

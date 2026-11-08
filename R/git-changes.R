@@ -63,7 +63,7 @@
 #'   which have no single well-defined staged/unstaged split).
 #' @noRd
 .git_status_entries <- function(repo_root, git_bin) {
-  raw <- .run_git_raw(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "-z", "--branch"))
+  raw <- .run_git_raw(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"))
   fields <- .split_nul(raw)
 
   entries <- list()
