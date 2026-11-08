@@ -90,6 +90,8 @@
 #'   to group files, which paths no action may change, which need extra
 #'   review before sending, and suggested `.gitignore` rules to offer when
 #'   the folder is first set up. See `vignette("launcher")`.
+#' @param git_exec_path Git's helper folder, for a Git build that needs it
+#'   named (one that isn't relocatable on its own). Must be an absolute folder.
 #' @param pass_env Names of environment variables (besides a small fixed set
 #'   such as `HOME`, `PATH` and the locale) to pass to Git unchanged.
 #'
@@ -105,7 +107,7 @@
 #' @export
 gitneighbr_serve <- function(repo, port, git, api_token, host = "127.0.0.1", base_path = "/",
                              shutdown_token = NULL, features = "local", git_config = NULL,
-                             policy_file = NULL, pass_env = character()) {
+                             policy_file = NULL, pass_env = character(), git_exec_path = NULL) {
   .assert_loopback_host(host)
   port <- suppressWarnings(as.integer(port))
   if (length(port) != 1L || is.na(port) || port < 1L || port > 65535L) {
@@ -149,7 +151,13 @@ gitneighbr_serve <- function(repo, port, git, api_token, host = "127.0.0.1", bas
     policy <- .read_launcher_policy(policy_file)
   }
   managed <- .managed_config(shutdown_token = shutdown_token, features = features, policy = policy)
-  git_bin <- .managed_git(git, git_config, pass_env = pass_env, remote = "remote" %in% managed$features)
+  if (!is.null(git_exec_path) && (!.is_absolute_path(git_exec_path) || !dir.exists(git_exec_path))) {
+    stop("`git_exec_path` must be an existing absolute folder.", call. = FALSE)
+  }
+  git_bin <- .managed_git(git, git_config,
+    pass_env = pass_env, remote = "remote" %in% managed$features,
+    exec_path = git_exec_path
+  )
   api <- .build_api(repo_root, git_bin, api_token, port, base_path = base_path, managed = managed)
   .serve_run(api, host, port, base_path, managed$control)
 }

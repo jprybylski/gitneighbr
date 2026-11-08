@@ -21,14 +21,15 @@ usage <- paste0(
   "                             trash, clone, github\n",
   "  --git-config=PATH          Git configuration file to use (outside the folder)\n",
   "  --pass-env=LIST            comma list of extra environment variables for Git\n",
-  "  --policy-file=PATH         launcher policy (JSON, outside the folder)\n"
+  "  --policy-file=PATH         launcher policy (JSON, outside the folder)\n",
+  "  --git-exec-path=PATH       Git's helper folder, for a Git that needs it named\n"
 )
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
 KNOWN <- c(
   "repo", "port", "git", "api-token-env", "host", "base-path", "shutdown-token-env", "features",
-  "git-config", "pass-env", "policy-file"
+  "git-config", "pass-env", "policy-file", "git-exec-path"
 )
 REQUIRED <- c("repo", "port", "git", "api-token-env")
 
@@ -94,6 +95,7 @@ status <- tryCatch(
     features = args[["features"]] %||% "local",
     git_config = args[["git-config"]],
     policy_file = args[["policy-file"]],
+    git_exec_path = args[["git-exec-path"]],
     pass_env = if (is.null(args[["pass-env"]])) character() else strsplit(args[["pass-env"]], ",", fixed = TRUE)[[1]]
   ),
   error = function(e) fail(conditionMessage(e))

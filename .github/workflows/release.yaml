@@ -80,11 +80,19 @@ jobs:
         if: env.DRY_RUN != 'true' && steps.check.outputs.skip != 'true'
         run: R CMD build . --compact-vignettes=gs+qpdf
 
+      # Launchers pin releases by checksum (e.g. for offline installs), so
+      # every release carries SHA256SUMS for its tarball.
+      - name: Write SHA256SUMS
+        if: env.DRY_RUN != 'true' && steps.check.outputs.skip != 'true'
+        run: |
+          sha256sum "${{ steps.sync.outputs.tarball }}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
       - name: Create release
         if: env.DRY_RUN != 'true' && steps.check.outputs.skip != 'true' && steps.sync.outputs.action == 'new'
         run: |
           gh release create "${{ steps.sync.outputs.tag }}" \
-            "${{ steps.sync.outputs.tarball }}" \
+            "${{ steps.sync.outputs.tarball }}" SHA256SUMS \
             --target "$(git rev-parse HEAD)" \
             --title "${{ steps.sync.outputs.tag }}" \
             --notes-file changelog.md
@@ -95,4 +103,4 @@ jobs:
           git tag -f "${{ steps.sync.outputs.tag }}" "$(git rev-parse HEAD)"
           git push origin "${{ steps.sync.outputs.tag }}" --force
           gh release edit "${{ steps.sync.outputs.tag }}" --notes-file changelog.md
-          gh release upload "${{ steps.sync.outputs.tag }}" "${{ steps.sync.outputs.tarball }}" --clobber
+          gh release upload "${{ steps.sync.outputs.tag }}" "${{ steps.sync.outputs.tarball }}" SHA256SUMS --clobber

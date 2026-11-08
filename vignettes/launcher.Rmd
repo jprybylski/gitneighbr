@@ -1,0 +1,164 @@
+---
+title: "Running gitneighbr from a launcher"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Running gitneighbr from a launcher}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+A launcher is a program that starts gitneighbr for someone, usually behind
+its own local web address, alongside other tools. gitneighbr's **managed
+mode** is made for this. Standalone use (`open_repo()`) is unchanged: it
+keeps using your own Git, hooks, signing and credential helpers.
+
+In managed mode gitneighbr:
+
+- runs in the foreground with fixed arguments, and never opens a browser;
+- serves its page and API under a path prefix, such as `/apps/gitneighbr/`;
+- takes its session token from a header the launcher's proxy adds, so the
+  page never holds a token and no token appears in any URL;
+- runs a Git executable the launcher trusts, locked down so the repository
+  can't make it start other programs;
+- works only on the exact folder it is given;
+- offers only the features the launcher enables, and refuses the rest on the
+  server.
+
+## Starting it
+
+```sh
+GN_TOKEN=... GN_SHUTDOWN=... \
+Rscript --vanilla <library>/gitneighbr/scripts/serve.R \
+  --repo=/path/to/folder --port=50123 --git=/path/to/git \
+  --api-token-env=GN_TOKEN --shutdown-token-env=GN_SHUTDOWN \
+  --base-path=/apps/gitneighbr/ \
+  --features=local,remote \
+  --git-config=/launcher/state/gitneighbr.gitconfig \
+  --policy-file=/launcher/state/gitneighbr-policy.json
+```
+
+The same options are available from R as `gitneighbr_serve()`. Secrets are
+passed by naming environment variables (`--*-token-env`), never on the
+command line.
+
+Once the socket is bound, one line is printed to standard output:
+
+```
+GITNEIGHBR_READY {"url":"http://127.0.0.1:50123/apps/gitneighbr/","host":"127.0.0.1","port":50123,"pid":4242,"version":"0.2.0"}
+```
+
+`GET <base>api/v1/health` needs no token. It reports `version`, `managed`, and
+`busy` (a Git action is running).
+
+To stop, send `POST <base>api/v1/shutdown` with both the session token and
+the `X-Gitneighbr-Shutdown-Token` header. The reply is sent in full, any running
+Git action finishes, and the process exits with status 0. The second token
+matters because the proxy adds the session token to every request a page
+makes, so the session token alone can't be enough to stop the server.
+
+## The proxy contract
+
+For every request under the prefix, the launcher's proxy must:
+
+- forward the full path (prefix included), or strip the prefix (both work);
+- set `Host` to `127.0.0.1:<port>`;
+- add `X-Gitneighbr-Token: <token>`, and drop any copy the browser sent;
+- drop `Origin`, `Cookie` and `Referer`, or pass a same-origin `Origin`.
+
+gitneighbr checks every route except health: the `Host` must be the loopback
+port, a browser-marked cross-site request (`Sec-Fetch-Site`) is refused, and
+the token must match. So a page on another site can't use the child port
+directly, even though it is on the same computer.
+
+## Features
+
+`--features=` is a comma list:
+
+| Feature | What it offers |
+|---|---|
+| `local` (always) | status, changes, diffs, selected-file snapshots, `.gitignore` help, explicit setup, identity |
+| `remote` | check destination, Send and Update with a full preview (below) |
+| `tags`, `restore`, `trash`, `clone`, `github` | the standalone app's extra actions |
+
+A route of a disabled feature returns `403 FEATURE_DISABLED` and does
+nothing. Without `github`, nothing starts `gh` or calls the GitHub API, so
+the page's regular status checks make no network requests.
+
+## Git in managed mode
+
+Git runs with:
+
+- a minimal environment: no inherited `GIT_*` or `SSH_*` variables; the
+  launcher can name more variables with `--pass-env`;
+- no system or user configuration. `--git-config` is the only extra
+  configuration file, and the identity form writes the name and email there;
+- hooks, templates, fsmonitor, pagers, editors, signing, credential helpers
+  and askpass all switched off;
+- HTTPS as the only transport;
+- `--no-ext-diff --no-textconv` on every diff.
+
+The folder must be a Git working tree that starts exactly at `--repo`, or
+not a repository at all (it can then be set up on request). Each of these
+is shown with an explanation and can't be changed:
+
+- a folder inside another repository;
+- a `.git` file or link;
+- `core.worktree`, alternates or submodules;
+- a local setting outside a reviewed allow-list (for example
+  `include.path`, filter drivers or credential settings);
+- a `filter=` attribute (Git LFS, encryption).
+
+## Policy file
+
+`--policy-file` points to JSON written by the launcher, outside the folder:
+
+```json
+{
+  "schema_version": 1,
+  "groups": [{"id": "sources", "label": "Editable sources", "globs": ["recipe/**"]}],
+  "default_group": {"id": "other", "label": "Other files"},
+  "protected": ["runs/**"],
+  "review": [{"id": "data", "label": "Study data", "message": "May identify people.", "globs": ["data/**"]}],
+  "send_blocked": [],
+  "ignore_template": [{"rule": "OUTPUTS/", "reason": "Rebuilt from a run."}],
+  "max_diff_bytes": 200000
+}
+```
+
+- **Groups** label changed files on the page. When a policy is set, nothing
+  is pre-selected.
+- **Protected** paths are never changed in the folder by restore, trash,
+  ignore or Update.
+- **Review** paths are marked on the page, and sending them needs an extra
+  confirmation.
+- **Send-blocked** paths make Send refuse.
+- **Ignore template** rules are offered, one by one, only when the user
+  explicitly sets up version history. They are written as a new
+  `.gitignore`, and never over an existing one.
+
+Globs are relative, use `/`, and support `*`, `?` and `**`. A trailing `/`
+means everything under that folder.
+
+## Send and Update
+
+With the `remote` feature, nothing touches the network until the user asks:
+
+1. **Check what would be sent** or **Check for updates** fetches only the
+   destination branch.
+2. The page then lists **every** snapshot that would leave or arrive. Each
+   one shows every changed path with its size, and whether it is binary,
+   marked for review, or blocked.
+3. Send pushes exactly the listed commit. Update fast-forwards to exactly the
+   listed commit. If anything changed in between, the action is refused.
+   Diverged history, conflicts, protected paths and local changes to incoming
+   files stop with an explanation. Nothing is forced, merged or rebased.
+
+Only HTTPS addresses are accepted. The user enters an access token on the
+page. It is kept in memory for the session and given to Git per command
+through `GIT_CONFIG_*` environment variables, as an
+`http.<address>.extraHeader`. It is never put on a command line, on disk, or
+in any response.

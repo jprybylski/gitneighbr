@@ -142,7 +142,7 @@
     return(list(
       ok = FALSE, code = "COMMAND_FAILED",
       message = "Failed to create feature branch.",
-      advanced = list(command = paste("git branch", pr_branch, "HEAD"), exit_status = create_res$status, stderr = create_res$stderr),
+      advanced = .advanced_block(c("branch", pr_branch, "HEAD"), create_res),
       recoverable = TRUE
     ))
   }

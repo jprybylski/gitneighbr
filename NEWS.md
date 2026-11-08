@@ -1,3 +1,32 @@
+# gitneighbr 0.2.0
+
+## Managed (launcher) mode
+
+A launcher can now run gitneighbr for someone, behind its own local web address. Standalone use with `open_repo()` is unchanged. See `vignette("launcher")`.
+
+* **Path prefix**: the page and API work under a path such as `/apps/gitneighbr/`, through proxies that forward or strip the prefix.
+* **Foreground entry point**: `gitneighbr_serve()` and `scripts/serve.R` print a `GITNEIGHBR_READY` line once the socket is bound. Health reports `version`, `busy` and `managed`. A shutdown route that needs a second token stops the server in order.
+* **Launcher token**: the token arrives in the `X-Gitneighbr-Token` header that the proxy adds, so the page holds none. Every route now refuses cross-site browser requests (`Sec-Fetch-Site`).
+* **Exact folder**: a managed session works only on the folder it is given. A folder inside another repository, a `.git` file or link, `core.worktree`, alternates and submodules are explained and refused.
+* **Locked-down Git**: Git runs with a launcher-trusted executable, no inherited `GIT_*`/`SSH_*` variables, and no system or user configuration. Hooks, fsmonitor, pagers, signing, credential helpers, external diff and text conversion are off, and HTTPS is the only transport. A repository whose settings or attributes need anything else (an include, a filter such as Git LFS, an unreviewed setting) is refused, naming the setting but not its value.
+* **Feature profiles**: `--features=` chooses what a session offers, and the server refuses the rest (`FEATURE_DISABLED`). Without `github`, nothing starts `gh` or calls the GitHub API.
+* **Launcher policy file**:
+  * groups changed files under labels;
+  * protects paths from every working-tree action;
+  * marks files that need extra review before sending, and blocks some from sending;
+  * can offer `.gitignore` rules when the folder is first set up, never written over an existing `.gitignore`.
+  * With a policy, nothing is pre-selected.
+* **Send and Update with a full preview**: a user-invoked check fetches the destination branch only. The preview lists every outgoing or incoming snapshot with each changed path, size and binary flag. Send pushes, and Update fast-forwards to, exactly the previewed commit, and refuses if anything changed. Access tokens are held in memory and reach Git only through environment variables.
+
+## Changes in every mode
+
+* A selected-file snapshot no longer changes what else was staged. It is built on a temporary index, and each selected path is re-checked when saving.
+* Repository policy (`require_pull_request`, `disallow_untracked_trash`) is now enforced by the server, not only by disabled buttons.
+* Untracked folders are listed file by file. This fixes the changes list when a new folder appears.
+* Standalone pages remove `#token=` from the address bar and history; reloading the tab still works.
+* `git clone` no longer reads an address starting with `-` as an option, and one remaining error detail is now sanitised.
+* Releases include `SHA256SUMS`.
+
 # gitneighbr 0.1.0
 
 Initial release of `gitneighbr`, a local, browser-based R package and application that helps people who are unfamiliar with Git understand, save, and publish changes in an existing Git repository — while remaining a fast, scriptable convenience tool for experienced users too.

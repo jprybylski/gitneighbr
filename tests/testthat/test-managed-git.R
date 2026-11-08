@@ -219,3 +219,14 @@ test_that(".managed_repo_check() refuses unreviewed settings and filters, naming
   writeLines("# filter=lfs is only mentioned in a comment\n*.txt text", file.path(repo$dir, ".gitattributes"))
   expect_identical(.managed_repo_check(repo$dir, git)$state, "worktree")
 })
+
+test_that("a named Git helper folder is passed before every subcommand", {
+  git <- unname(Sys.which("git"))
+  skip_if(!nzchar(git), "git not available")
+  exec_path <- trimws(processx::run(git, "--exec-path")$stdout)
+  managed <- .managed_git(git, withr::local_tempfile(fileext = ".gitconfig"), exec_path = exec_path)
+  args <- .managed_git_args(attr(managed, "gitneighbr_managed"), c("-C", "/r", "status"))
+  expect_identical(args[[1]], paste0("--exec-path=", normalizePath(exec_path, winslash = "/")))
+  expect_identical(trimws(.git_exec(managed, "--exec-path")$stdout), normalizePath(exec_path, winslash = "/"))
+  expect_error(.managed_git(git, tempfile(), exec_path = file.path(tempdir(), "no-such-dir")))
+})

@@ -73,7 +73,7 @@
     ))
   }
 
-  clone_args <- c("clone", url, workspace_path)
+  clone_args <- c("clone", "--", url, workspace_path)
   result <- .git_exec(git_bin, clone_args, error_on_status = FALSE, timeout = 300)
   if (!identical(result$status, 0L)) {
     return(list(

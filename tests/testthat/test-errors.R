@@ -51,3 +51,13 @@ test_that(".gitneighbr_error / .stop_gitneighbr_error carry a stable code on the
   expect_equal(err$code, "GIT_TOO_OLD")
   expect_equal(conditionMessage(err), "too old")
 })
+
+test_that("every advanced block in R/ goes through .advanced_block() or sanitising", {
+  root <- testthat::test_path("..", "..", "R")
+  skip_if(!dir.exists(root), "package source not available")
+  for (file in list.files(root, pattern = "\\.R$", full.names = TRUE)) {
+    lines <- readLines(file)
+    raw <- grep("stderr = [A-Za-z_.]+\\$stderr", lines, value = TRUE)
+    expect_length(raw, 0L)
+  }
+})

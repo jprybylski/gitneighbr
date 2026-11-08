@@ -64,9 +64,13 @@
 #'   unchanged (for a launcher's own Git setup).
 #' @param remote Whether remote actions are enabled (keeps proxy settings).
 #' @param protocols Transport protocols Git may use.
+#' @param exec_path Git's own helper folder (`git --exec-path`), for a Git
+#'   build that isn't relocatable on its own. Passed as `--exec-path=` on
+#'   every call, since `GIT_EXEC_PATH` is never inherited.
 #' @return `git` with a `gitneighbr_managed` attribute.
 #' @noRd
-.managed_git <- function(git, config_file, pass_env = character(), remote = FALSE, protocols = "https") {
+.managed_git <- function(git, config_file, pass_env = character(), remote = FALSE, protocols = "https",
+                         exec_path = NULL) {
   empty <- file.path(tempdir(), "gitneighbr-empty")
   dir.create(empty, showWarnings = FALSE, recursive = TRUE)
   if (length(list.files(empty, all.files = TRUE, no.. = TRUE)) > 0L) {
@@ -115,6 +119,9 @@
     stats::setNames(rep("always", length(protocols)), paste0("protocol.", protocols, ".allow"))
   )
   config_args <- as.vector(rbind("-c", paste0(names(config), "=", config)))
+  if (!is.null(exec_path)) {
+    config_args <- c(paste0("--exec-path=", normalizePath(exec_path, winslash = "/", mustWork = TRUE)), config_args)
+  }
 
   structure(
     normalizePath(git, winslash = "/", mustWork = TRUE),

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import ManagedRemote from "./ManagedRemote.svelte";
 
   type Notice = { code: string; message: string };
 
@@ -52,8 +53,35 @@
     disallow_untracked_trash: boolean;
   };
 
+  type RepoCheck = { state: string; code: string; message: string; detail: string | null };
+
+  type LayoutGroup = { id: string; label: string; description: string | null };
+  type ReviewLabel = { id: string; label: string; message: string };
+  type IgnoreSuggestion = { rule: string; reason: string };
+  type Layout = {
+    groups: LayoutGroup[];
+    review: ReviewLabel[];
+    ignore_template: IgnoreSuggestion[];
+    gitignore_exists: boolean;
+  };
+
+  type RemoteStatus = {
+    configured: boolean;
+    usable: boolean;
+    problem: { code: string; message: string } | null;
+    host: string | null;
+    address: string | null;
+    branch: string | null;
+    has_token: boolean;
+    checked: boolean;
+  };
+
   type StatusData = {
-    repository: { root_display: string };
+    repository: { root_display: string; check?: RepoCheck | null };
+    managed?: boolean;
+    features?: string[];
+    layout?: Layout | null;
+    remote?: RemoteStatus | null;
     primary_state: string;
     upstream: string | null;
     branch: string | null;
@@ -100,6 +128,9 @@
     deleted: number | null;
     binary: boolean;
     large: boolean;
+    group?: string;
+    protected?: boolean;
+    review?: string[];
   };
 
   type DiffData = {
@@ -198,7 +229,35 @@
     DETACHED_HEAD: "You're not currently on a branch.",
     NOT_REPOSITORY: "This folder isn't a Git project.",
     GIT_UNAVAILABLE: "Git isn't available on this computer.",
+    ENCLOSING_REPOSITORY: "This folder is inside another Git project.",
+    UNSUPPORTED_REPOSITORY: "This Git project can't be used here.",
   };
+
+  // A managed session talks about "the shared copy", not GitHub: its
+  // destination can be any HTTPS Git server.
+  const MANAGED_STATE_COPY: Record<string, string> = {
+    LOCAL_ONLY: "You have saved snapshots that haven't been sent to the shared copy.",
+    CHANGES_AND_LOCAL: "You have changes that aren't in a snapshot yet, plus snapshots that haven't been sent.",
+    REMOTE_ONLY_CLEAN: "The shared copy has newer snapshots you don't have yet.",
+    REMOTE_ONLY_DIRTY: "The shared copy has newer snapshots, and you also have changes that aren't in a snapshot yet.",
+    DIVERGED: "This project and the shared copy have each changed and need help to combine.",
+    AUTH_REQUIRED: "The shared copy needs an access token.",
+    NO_UPSTREAM: "Snapshots are kept on this computer only.",
+    NOT_REPOSITORY: "Version history isn't set up in this folder yet.",
+  };
+
+  function stateCopy(state: string): string {
+    return (status?.managed ? MANAGED_STATE_COPY[state] : undefined) ?? STATE_COPY[state] ?? state;
+  }
+
+  // The server decides what this session offers; the page only mirrors it.
+  // A standalone session's status lists every feature.
+  function feat(name: string): boolean {
+    return status?.features ? status.features.includes(name) : true;
+  }
+
+  // Suggested .gitignore rules the user keeps (managed setup only).
+  let ignoreChoices = $state<Set<string> | null>(null);
 
   const CHANGE_STATE_LABEL: Record<ChangeState, string> = {
     NEW: "New",
@@ -540,7 +599,8 @@
   const summaryLength = $derived(summary.trim().length);
   const summaryValid = $derived(summaryLength >= 3 && summaryLength <= 72);
   const tagNameValid = $derived(!markAsVersion || tagName.trim().length > 0);
-  const canSend = $derived(status?.upstream != null);
+  // A managed session never sends as part of saving: Send is its own reviewed step.
+  const canSend = $derived(status?.upstream != null && feat("standalone"));
   const willSend = $derived(canSend && sendToGithub);
   const actionLabel = $derived(willSend ? "Save and send" : "Save snapshot");
   const canSave = $derived(selected.size > 0 && summaryValid && tagNameValid && !committing && !sending);
@@ -621,6 +681,9 @@
         result.add(path);
       }
     }
+    // With a launcher layout nothing is pre-selected: each file is chosen
+    // deliberately.
+    if (status?.layout) return result;
     for (const change of next) {
       if (!previousPaths.has(change.path)) {
         result.add(change.path);
@@ -1128,7 +1191,8 @@
     initError = null;
     initializing = true;
     try {
-      const envelope = await postApi<Record<string, never>>("api/v1/init", {});
+      const rules = status?.layout && !status.layout.gitignore_exists ? [...(ignoreChoices ?? new Set())] : [];
+      const envelope = await postApi<Record<string, never>>("api/v1/init", rules.length > 0 ? { ignore_rules: rules } : {});
       if (!envelope.ok) {
         initError = envelope.error ?? { message: "Could not initialize a Git repository here." };
         return;
@@ -1258,6 +1322,85 @@
   startPolling();
 </script>
 
+{#snippet changeRow(change: ChangeEntry)}
+            <li class="change-row" class:active={activePath === change.path}>
+              <div class="change-row-main">
+                <label class="change-select">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(change.path)}
+                    onchange={() => toggleSelected(change.path)}
+                    aria-label={`Include ${change.path} in the next snapshot`}
+                  />
+                </label>
+                <button type="button" class="change-path" onclick={() => openDiff(change.path)}>
+                  {#if change.state === "RENAMED" && change.old_path}
+                    <span class="path-text">{change.old_path} &rarr; {change.path}</span>
+                  {:else}
+                    <span class="path-text">{change.path}</span>
+                  {/if}
+                </button>
+                <span class="change-tag tag-{change.state.toLowerCase()}">{CHANGE_STATE_LABEL[change.state]}</span>
+                {#if change.binary}
+                  <span class="change-flag">Binary</span>
+                {:else if change.added !== null || change.deleted !== null}
+                  <span class="change-stats">
+                    <span class="stat-add">+{change.added ?? 0}</span>
+                    <span class="stat-del">-{change.deleted ?? 0}</span>
+                  </span>
+                {/if}
+                {#if change.large}
+                  <span class="change-flag">Large</span>
+                {/if}
+                {#if change.protected}
+                  <span class="change-flag" title="Version history never changes this file in the folder">Protected</span>
+                {/if}
+                {#each change.review ?? [] as id (id)}
+                  <span class="change-flag review-flag" title={status?.layout?.review.find((r) => r.id === id)?.message}>
+                    {status?.layout?.review.find((r) => r.id === id)?.label ?? id}
+                  </span>
+                {/each}
+              </div>
+              {#if change.state === "NEW"}
+                <div class="change-row-actions">
+                  {#if feat("trash") && !change.protected}
+                  <button
+                    type="button"
+                    class="row-action-button danger"
+                    disabled={rowBusyPath === change.path || Boolean(status?.capabilities?.disallow_untracked_trash)}
+                    title={status?.capabilities?.disallow_untracked_trash ? "Disabled by repository policy" : undefined}
+                    aria-label={`Remove ${change.path}`}
+                    onclick={() => trashFile(change.path)}
+                  >
+                    {rowBusyPath === change.path ? "Removing…" : "Remove"}
+                  </button>
+                  {/if}
+                  <button
+                    type="button"
+                    class="row-action-button"
+                    disabled={rowBusyPath === change.path}
+                    aria-label={`Stop showing this file: ${change.path}`}
+                    onclick={() => ignoreFile(change.path)}
+                  >
+                    {rowBusyPath === change.path ? "Updating…" : "Stop showing this file"}
+                  </button>
+                </div>
+              {:else if change.state !== "CONFLICTED" && feat("restore") && !change.protected}
+                <div class="change-row-actions">
+                  <button
+                    type="button"
+                    class="row-action-button danger"
+                    disabled={rowBusyPath === change.path}
+                    aria-label={`Restore last saved version: ${change.path}`}
+                    onclick={() => restoreFile(change.path)}
+                  >
+                    {rowBusyPath === change.path ? "Restoring…" : "Restore last saved version"}
+                  </button>
+                </div>
+              {/if}
+            </li>
+{/snippet}
+
 {#snippet advancedDetails(advanced: AdvancedDetails)}
   <details class="advanced-details">
     <summary>Advanced details</summary>
@@ -1360,7 +1503,7 @@
       {#if status.branch}
         <p class="branch">Branch: {status.branch}</p>
       {/if}
-      <p class="state">{STATE_COPY[status.primary_state] ?? status.primary_state}</p>
+      <p class="state">{stateCopy(status.primary_state)}</p>
       {#if status.policy?.has_policy_file}
         <div class="policy-indicator" role="note">
           <span class="policy-badge">Policy</span>
@@ -1371,19 +1514,59 @@
           {/if}
         </div>
       {/if}
-      {#if status.primary_state === "NOT_REPOSITORY"}
+      {#if status.repository.check && status.primary_state !== "NOT_REPOSITORY"}
+        <section class="identity-section" aria-label="Why this folder can't be used">
+          <p>{status.repository.check.message}</p>
+          {#if status.repository.check.detail}
+            <p class="changes-hint">Found: <code>{status.repository.check.detail}</code></p>
+          {/if}
+          <p class="changes-hint">Nothing here has been changed.</p>
+        </section>
+      {:else if status.primary_state === "NOT_REPOSITORY"}
         <section class="identity-section" aria-label="Set up this folder">
-          <h3>Initialize a Git repository here</h3>
+          <h3>{status.managed ? "Start version history here" : "Initialize a Git repository here"}</h3>
           <p>Start tracking changes in this folder. Any files already here are kept.</p>
+          {#if status.layout && status.layout.ignore_template.length > 0}
+            {#if status.layout.gitignore_exists}
+              <p class="changes-hint">This folder already has a .gitignore, so it is kept as it is.</p>
+            {:else}
+              <fieldset class="ignore-template">
+                <legend>Files to leave out of snapshots (a new .gitignore)</legend>
+                <p class="changes-hint">
+                  Untick anything you want snapshots to include. Left-out files still appear under "show ignored" and
+                  stay on this computer.
+                </p>
+                {#each status.layout.ignore_template as suggestion (suggestion.rule)}
+                  <label class="field-inline">
+                    <input
+                      type="checkbox"
+                      checked={(ignoreChoices ?? new Set(status.layout.ignore_template.map((t) => t.rule))).has(suggestion.rule)}
+                      onchange={(e) => {
+                        const next = new Set(ignoreChoices ?? (status?.layout?.ignore_template ?? []).map((t) => t.rule));
+                        if ((e.currentTarget as HTMLInputElement).checked) next.add(suggestion.rule);
+                        else next.delete(suggestion.rule);
+                        ignoreChoices = next;
+                      }}
+                    />
+                    <code>{suggestion.rule}</code> &mdash; {suggestion.reason}
+                  </label>
+                {/each}
+              </fieldset>
+            {/if}
+          {/if}
           <div id="init-result" tabindex="-1">
             {#if initError}
               {@render errorCard(initError)}
             {/if}
           </div>
-          <button type="button" class="update-button" disabled={initializing} onclick={initializeHere}>
-            {initializing ? "Initializing…" : "Initialize a Git repository here"}
+          <button type="button" class="update-button" disabled={initializing} onclick={() => {
+            if (ignoreChoices === null && status?.layout) ignoreChoices = new Set(status.layout.ignore_template.map((t) => t.rule));
+            initializeHere();
+          }}>
+            {initializing ? "Initializing…" : status.managed ? "Start version history here" : "Initialize a Git repository here"}
           </button>
         </section>
+        {#if feat("clone")}
         <section class="identity-section" aria-label="Clone an existing GitHub repository">
           <h3>Or clone an existing GitHub repository</h3>
           <p>Copy a repository from GitHub into this folder.</p>
@@ -1404,6 +1587,7 @@
             {cloning ? "Cloning…" : "Clone into this folder"}
           </button>
         </section>
+        {/if}
       {:else}
       <dl>
         <dt>Not yet in a snapshot</dt>
@@ -1459,7 +1643,7 @@
           </button>
         </section>
       {/if}
-      {#if status.primary_state === "AUTH_REQUIRED"}
+      {#if status.primary_state === "AUTH_REQUIRED" && feat("standalone")}
         <section class="identity-section" aria-label="Reconnect to GitHub">
           <h3>Reconnecting to GitHub</h3>
           <p>gitneighbr could not verify your access the last time it checked GitHub. Your saved work is safe.</p>
@@ -1521,7 +1705,7 @@
           </button>
         </section>
       {/if}
-      {#if status.primary_state === "NO_UPSTREAM" || publishError || publishSuccess}
+      {#if feat("standalone") && (status.primary_state === "NO_UPSTREAM" || publishError || publishSuccess)}
         <section class="identity-section" aria-label="Connect to GitHub">
           <h3>Connect to GitHub</h3>
           {#if status.primary_state === "NO_UPSTREAM"}
@@ -1557,7 +1741,7 @@
           {/if}
         </section>
       {/if}
-      {#if canUpdate || updateError || updateSuccess}
+      {#if feat("standalone") && (canUpdate || updateError || updateSuccess)}
         <div class="update-section">
           {#if canUpdate}
             <button type="button" class="update-button" disabled={updating} onclick={getUpdates}>
@@ -1573,7 +1757,16 @@
           </div>
         </div>
       {/if}
-      {#if canSendStandalone || (changes.length === 0 && (sendError || sendSuccess || canRetrySend || prResult))}
+      {#if status.managed && feat("remote") && status.remote}
+        <ManagedRemote
+          remote={status.remote}
+          reviewLabels={status.layout?.review ?? []}
+          {api}
+          {postApi}
+          refresh={refresh}
+        />
+      {/if}
+      {#if feat("standalone") && (canSendStandalone || (changes.length === 0 && (sendError || sendSuccess || canRetrySend || prResult)))}
         <div class="update-section">
           {#if canSendStandalone}
             {#if status.capabilities?.requires_pull_request}
@@ -1622,76 +1815,26 @@
         <p class="changes-hint">
           These files are already saved on your computer - they just haven't been included in a snapshot yet.
         </p>
+        {#if status?.layout}
+          {#each status.layout.groups as group (group.id)}
+            {@const members = changes.filter((c) => (c.group ?? "other") === group.id)}
+            {#if members.length > 0}
+              <h3 class="change-group">{group.label} <span class="selection-count">({members.length})</span></h3>
+              {#if group.description}<p class="changes-hint">{group.description}</p>{/if}
+              <ul class="change-list">
+                {#each members as change (change.path)}
+                  {@render changeRow(change)}
+                {/each}
+              </ul>
+            {/if}
+          {/each}
+        {:else}
         <ul class="change-list">
           {#each changes as change (change.path)}
-            <li class="change-row" class:active={activePath === change.path}>
-              <div class="change-row-main">
-                <label class="change-select">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(change.path)}
-                    onchange={() => toggleSelected(change.path)}
-                    aria-label={`Include ${change.path} in the next snapshot`}
-                  />
-                </label>
-                <button type="button" class="change-path" onclick={() => openDiff(change.path)}>
-                  {#if change.state === "RENAMED" && change.old_path}
-                    <span class="path-text">{change.old_path} &rarr; {change.path}</span>
-                  {:else}
-                    <span class="path-text">{change.path}</span>
-                  {/if}
-                </button>
-                <span class="change-tag tag-{change.state.toLowerCase()}">{CHANGE_STATE_LABEL[change.state]}</span>
-                {#if change.binary}
-                  <span class="change-flag">Binary</span>
-                {:else if change.added !== null || change.deleted !== null}
-                  <span class="change-stats">
-                    <span class="stat-add">+{change.added ?? 0}</span>
-                    <span class="stat-del">-{change.deleted ?? 0}</span>
-                  </span>
-                {/if}
-                {#if change.large}
-                  <span class="change-flag">Large</span>
-                {/if}
-              </div>
-              {#if change.state === "NEW"}
-                <div class="change-row-actions">
-                  <button
-                    type="button"
-                    class="row-action-button danger"
-                    disabled={rowBusyPath === change.path || Boolean(status?.capabilities?.disallow_untracked_trash)}
-                    title={status?.capabilities?.disallow_untracked_trash ? "Disabled by repository policy" : undefined}
-                    aria-label={`Remove ${change.path}`}
-                    onclick={() => trashFile(change.path)}
-                  >
-                    {rowBusyPath === change.path ? "Removing…" : "Remove"}
-                  </button>
-                  <button
-                    type="button"
-                    class="row-action-button"
-                    disabled={rowBusyPath === change.path}
-                    aria-label={`Stop showing this file: ${change.path}`}
-                    onclick={() => ignoreFile(change.path)}
-                  >
-                    {rowBusyPath === change.path ? "Updating…" : "Stop showing this file"}
-                  </button>
-                </div>
-              {:else if change.state !== "CONFLICTED"}
-                <div class="change-row-actions">
-                  <button
-                    type="button"
-                    class="row-action-button danger"
-                    disabled={rowBusyPath === change.path}
-                    aria-label={`Restore last saved version: ${change.path}`}
-                    onclick={() => restoreFile(change.path)}
-                  >
-                    {rowBusyPath === change.path ? "Restoring…" : "Restore last saved version"}
-                  </button>
-                </div>
-              {/if}
-            </li>
+            {@render changeRow(change)}
           {/each}
         </ul>
+        {/if}
       </section>
     {/if}
 
@@ -1776,7 +1919,7 @@
             disabled={committing}
           ></textarea>
 
-          {#if canSend}
+          {#if canSend && feat("standalone")}
             <label class="field-inline">
               <input
                 type="checkbox"
@@ -1787,6 +1930,7 @@
             </label>
           {/if}
 
+          {#if feat("tags")}
           <label class="field-inline">
             <input
               type="checkbox"
@@ -1795,7 +1939,8 @@
             />
             Mark this snapshot as a version
           </label>
-          {#if markAsVersion}
+          {/if}
+          {#if markAsVersion && feat("tags")}
             <div class="tag-fields">
               <label class="field" for="tag-name">
                 Version label <span class="required">(required)</span>

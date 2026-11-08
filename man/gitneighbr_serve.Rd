@@ -14,7 +14,9 @@ gitneighbr_serve(
   shutdown_token = NULL,
   features = "local",
   git_config = NULL,
-  pass_env = character()
+  policy_file = NULL,
+  pass_env = character(),
+  git_exec_path = NULL
 )
 }
 \arguments{
@@ -42,8 +44,16 @@ repository's own, and where the identity form saves a name and email. A
 launcher passes a file it owns, outside the folder. Without it a
 temporary file is used and identity lasts for this session only.}
 
+\item{policy_file}{A launcher policy file (JSON, outside the folder): how
+to group files, which paths no action may change, which need extra
+review before sending, and suggested \code{.gitignore} rules to offer when
+the folder is first set up. See \code{vignette("launcher")}.}
+
 \item{pass_env}{Names of environment variables (besides a small fixed set
 such as \code{HOME}, \code{PATH} and the locale) to pass to Git unchanged.}
+
+\item{git_exec_path}{Git's helper folder, for a Git build that needs it
+named (one that isn't relocatable on its own). Must be an absolute folder.}
 }
 \value{
 Invisibly, \code{0L} once the server has stopped.
