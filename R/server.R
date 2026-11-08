@@ -69,9 +69,16 @@
 #'   seed state -- e.g. `mutation_lock <- TRUE` to exercise the
 #'   `OPERATION_IN_PROGRESS` branch of every mutating endpoint without a real
 #'   race -- before the app is built; production callers always omit it.
+#' @param base_path The URL path a reverse proxy serves the app under, such as
+#'   `"/apps/gitneighbr/"`. The app always answers at `/` too, so it works
+#'   behind proxies that strip the prefix and ones that forward the full path.
+#' @param managed `NULL` for a standalone session, or a launcher configuration
+#'   from `.managed_config()`: the token then arrives in the
+#'   `X-Gitneighbr-Token` header, only the configured features are served,
+#'   and a shutdown route exists when a shutdown token was given.
 #' @noRd
 .build_api <- function(repo_root, git_bin, token, port, www_dir = system.file("www", package = "gitneighbr"),
-                        session_state = NULL) {
+                        session_state = NULL, base_path = "/", managed = NULL) {
   # plumber2's default JSON serializer does not auto-unbox length-1
   # vectors (so `list(ok = TRUE)` would serialize as `{"ok":[true]}`),
   # which is surprising for API clients. `register_serializer()` expects
@@ -117,11 +124,53 @@
     }
   }
 
+  # A standalone page sends `Authorization: Bearer` (token from the URL
+  # fragment). A managed session's token is injected by the launcher's
+  # proxy in its own header instead, so the page never holds it and the
+  # proxy never has to touch a user's `Authorization`.
   require_auth <- function(request) {
-    supplied <- request$get_header("Authorization")
-    supplied <- sub("^Bearer\\s+", "", supplied %||% "")
+    if (is.null(managed)) {
+      supplied <- request$get_header("Authorization")
+      supplied <- sub("^Bearer\\s+", "", supplied %||% "")
+    } else {
+      supplied <- request$get_header(.MANAGED_TOKEN_HEADER) %||% ""
+    }
     if (!.tokens_match(supplied, token)) {
       plumber2::abort_unauthorized("Missing or invalid session token.")
+    }
+  }
+
+  # A browser marks every request with `Sec-Fetch-Site`; anything a page on
+  # another site made it send (a form post, an image, a fetch) is refused
+  # before authentication. Non-browser callers send no such header.
+  validate_fetch_site <- function(request) {
+    site <- request$get_header("Sec-Fetch-Site")
+    if (!is.null(site) && !site %in% c("same-origin", "none")) {
+      plumber2::abort_forbidden("Cross-site request refused.")
+    }
+  }
+
+  features <- if (is.null(managed)) .MANAGED_FEATURES else managed$features
+
+  # Every route goes through this: Host, cross-site and token checks run
+  # before the handler (which repeats the Host and token checks itself; that
+  # is harmless), and a route whose feature is off is refused untouched.
+  guard <- function(handler, public = FALSE, feature = NULL) {
+    wanted <- intersect(c("request", "response"), names(formals(handler)))
+    function(request, response) {
+      validate_host(request)
+      validate_fetch_site(request)
+      if (!public) {
+        require_auth(request)
+      }
+      if (!is.null(feature) && !all(feature %in% features)) {
+        response$status <- 403L
+        return(.error_envelope(
+          "FEATURE_DISABLED", "That action isn't available here.",
+          recoverable = FALSE
+        ))
+      }
+      do.call(handler, list(request = request, response = response)[wanted])
     }
   }
 
@@ -198,21 +247,73 @@
     }
   }
 
+  base_path <- .normalize_base_path(base_path)
+  prefixes <- unique(c("/", base_path))
+  www_dir <- .prepare_www(www_dir, base_path)
+
+  # Every route is registered under each prefix: "/" for direct use and
+  # prefix-stripping proxies, and `base_path` for proxies that forward the
+  # full path. Paths here are relative ("api/v1/...").
+  route_get <- function(api, path, handler, public = FALSE, feature = NULL) {
+    handler <- guard(handler, public = public, feature = feature)
+    for (prefix in prefixes) {
+      api <- plumber2::api_get(api, paste0(prefix, path), handler)
+    }
+    api
+  }
+  route_post <- function(api, path, handler, feature = NULL) {
+    handler <- guard(handler, feature = feature)
+    for (prefix in prefixes) {
+      api <- plumber2::api_post(api, paste0(prefix, path), handler)
+    }
+    api
+  }
+  # The shutdown route exists only for a managed session started with a
+  # shutdown token. It needs that second token as well as the session one:
+  # the proxy injects the session token into every request a page makes,
+  # so the session token alone must not be enough to stop the server.
+  shutdown_route <- function(api) {
+    if (is.null(managed) || is.null(managed$shutdown_token)) {
+      return(api)
+    }
+    route_post(api, "api/v1/shutdown", function(request, response) {
+      supplied <- request$get_header(.MANAGED_SHUTDOWN_HEADER) %||% ""
+      if (!.tokens_match(supplied, managed$shutdown_token)) {
+        plumber2::abort_forbidden("Missing or invalid shutdown token.")
+      }
+      managed$control$stop_requested <- TRUE
+      list(ok = TRUE, data = list(stopping = TRUE), error = NULL)
+    })
+  }
+  # `httpuv`'s static-file layer intercepts every request under `at`
+  # (prefix-matched, so "/" means *every* path) before the router ever
+  # sees it, and only knows how to serve GET/HEAD - any other method
+  # anywhere on the site, including a POST to "/api/v1/...", gets a flat
+  # 400 with `fallthrough` having no effect (fallthrough only covers a
+  # missing *file* on GET). `except` tells httpuv to treat that prefix as
+  # not-static at all, handing it to the router (and its own methods)
+  # unmodified. The most specific `at` wins, so each prefix gets its own
+  # mount with its own `except`.
+  statics <- function(api) {
+    for (prefix in prefixes) {
+      api <- plumber2::api_statics(api, at = prefix, path = www_dir, fallthrough = TRUE, except = "api")
+    }
+    api
+  }
+
   plumber2::api(host = "127.0.0.1") |>
-    # `httpuv`'s static-file layer intercepts every request under `at`
-    # (prefix-matched, so "/" means *every* path) before the router ever
-    # sees it, and only knows how to serve GET/HEAD - any other method
-    # anywhere on the site, including a POST to "/api/v1/...", gets a flat
-    # 400 with `fallthrough` having no effect (fallthrough only covers a
-    # missing *file* on GET). `except` tells httpuv to treat that prefix as
-    # not-static at all, handing it to the router (and its own methods)
-    # unmodified.
-    plumber2::api_statics(at = "/", path = www_dir, fallthrough = TRUE, except = "api") |>
-    plumber2::api_get("/api/v1/health", function(request) {
+    statics() |>
+    shutdown_route() |>
+    route_get("api/v1/health", function(request) {
       validate_host(request)
-      list(ok = TRUE, data = list(status = "ok"), error = NULL)
-    }) |>
-    plumber2::api_get("/api/v1/status", function(request) {
+      list(ok = TRUE, data = list(
+        status = "ok",
+        version = as.character(utils::packageVersion("gitneighbr")),
+        busy = isTRUE(session_state$mutation_lock),
+        managed = !is.null(managed)
+      ), error = NULL)
+    }, public = TRUE) |>
+    route_get("api/v1/status", function(request) {
       validate_host(request)
       require_auth(request)
 
@@ -220,7 +321,7 @@
       payload <- .status_payload(repo_root, git_bin, session_state, show_ignored = show_ignored)
       .ok_envelope(payload$data, status_version = payload$version)
     }) |>
-    plumber2::api_get("/api/v1/changes", function(request) {
+    route_get("api/v1/changes", function(request) {
       validate_host(request)
       require_auth(request)
 
@@ -233,7 +334,7 @@
       }
       .ok_envelope(list(changes = .git_changes(repo_root, git_bin)))
     }) |>
-    plumber2::api_get("/api/v1/diff", function(request) {
+    route_get("api/v1/diff", function(request) {
       validate_host(request)
       require_auth(request)
 
@@ -265,7 +366,7 @@
       }
       .ok_envelope(result[names(result) != "found"])
     }) |>
-    plumber2::api_get("/api/v1/identity", function(request) {
+    route_get("api/v1/identity", function(request) {
       validate_host(request)
       require_auth(request)
 
@@ -278,7 +379,7 @@
       }
       .ok_envelope(.git_identity(repo_root, git_bin))
     }) |>
-    plumber2::api_get("/api/v1/credential-diagnosis", function(request) {
+    route_get("api/v1/credential-diagnosis", function(request) {
       validate_host(request)
       require_auth(request)
 
@@ -291,7 +392,7 @@
       }
       .ok_envelope(.git_credential_diagnosis(repo_root, git_bin))
     }) |>
-    plumber2::api_get("/api/v1/diagnostic-report", function(request) {
+    route_get("api/v1/diagnostic-report", function(request) {
       validate_host(request)
       require_auth(request)
 
@@ -304,7 +405,7 @@
       }
       .ok_envelope(list(report = .diagnostic_report(repo_root, git_bin, session_state)))
     }) |>
-    plumber2::api_post("/api/v1/identity", function(request, response) {
+    route_post("api/v1/identity", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -346,7 +447,7 @@
       }
       .ok_envelope(list(name = result$name, email = result$email, scope = result$scope), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/commit", function(request, response) {
+    route_post("api/v1/commit", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -393,7 +494,7 @@
       }
       .ok_envelope(list(sha = result$sha, summary = result$summary), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/refresh-remote", function(request, response) {
+    route_post("api/v1/refresh-remote", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -445,7 +546,7 @@
         untracked_count = result$untracked_count %||% 0L
       ), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/push", function(request, response) {
+    route_post("api/v1/push", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -494,7 +595,7 @@
         pushed_count = result$pushed_count
       ), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/update", function(request, response) {
+    route_post("api/v1/update", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -543,7 +644,7 @@
         updated_count = result$updated_count
       ), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/tag", function(request, response) {
+    route_post("api/v1/tag", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -588,7 +689,7 @@
       }
       .ok_envelope(list(name = result$name, sha = result$sha), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/push-tag", function(request, response) {
+    route_post("api/v1/push-tag", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -635,7 +736,7 @@
       }
       .ok_envelope(list(remote = result$remote, name = result$name), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/restore", function(request, response) {
+    route_post("api/v1/restore", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -677,7 +778,7 @@
       }
       .ok_envelope(list(path = result$path), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/trash", function(request, response) {
+    route_post("api/v1/trash", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -719,7 +820,7 @@
       }
       .ok_envelope(list(path = result$path), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/ignore", function(request, response) {
+    route_post("api/v1/ignore", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -761,7 +862,7 @@
       }
       .ok_envelope(list(path = result$path, rule = result$rule, added = result$added), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/init", function(request, response) {
+    route_post("api/v1/init", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -799,7 +900,7 @@
       }
       .ok_envelope(list(), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/clone", function(request, response) {
+    route_post("api/v1/clone", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -837,7 +938,7 @@
       }
       .ok_envelope(list(), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/publish", function(request, response) {
+    route_post("api/v1/publish", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -886,20 +987,20 @@
         pushed_count = result$pushed_count
       ), status_version = payload$version)
     }) |>
-    plumber2::api_get("/api/v1/policy", function(request) {
+    route_get("api/v1/policy", function(request) {
       validate_host(request)
       require_auth(request)
       policy <- .read_repo_policy(repo_root)
       list(ok = TRUE, data = policy, error = NULL)
     }) |>
-    plumber2::api_get("/api/v1/github/status", function(request) {
+    route_get("api/v1/github/status", function(request) {
       validate_host(request)
       require_auth(request)
       policy <- .read_repo_policy(repo_root)
       gh_status <- .github_api_status(repo_root, git_bin, session_state = session_state, policy = policy)
       list(ok = TRUE, data = gh_status, error = NULL)
     }) |>
-    plumber2::api_post("/api/v1/github/connect", function(request, response) {
+    route_post("api/v1/github/connect", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -918,7 +1019,7 @@
       payload <- .status_payload(repo_root, git_bin, session_state)
       .ok_envelope(list(connected = TRUE, user = user), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/github/disconnect", function(request, response) {
+    route_post("api/v1/github/disconnect", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -926,7 +1027,7 @@
       payload <- .status_payload(repo_root, git_bin, session_state)
       .ok_envelope(list(connected = FALSE), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/pull-request", function(request, response) {
+    route_post("api/v1/pull-request", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -986,7 +1087,7 @@
         state = result$state
       ), status_version = payload$version)
     }) |>
-    plumber2::api_post("/api/v1/github/release", function(request, response) {
+    route_post("api/v1/github/release", function(request, response) {
       validate_host(request)
       require_auth(request)
       validate_origin(request)
@@ -1047,7 +1148,7 @@
         prerelease = result$data$prerelease
       ), status_version = payload$version)
     }) |>
-    plumber2::api_get("/api/v1/github/releases", function(request) {
+    route_get("api/v1/github/releases", function(request) {
       validate_host(request)
       require_auth(request)
       policy <- .read_repo_policy(repo_root)

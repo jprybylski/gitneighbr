@@ -6,6 +6,8 @@
 \alias{gitneighbr-package}
 \title{gitneighbr: Git Help, from a Friendly Neighbor}
 \description{
+\if{html}{\figure{logo.png}{options: style='float: right' alt='logo' width='120'}}
+
 A local, browser-based application that helps people who are unfamiliar with Git understand, save, and publish changes in an existing Git repository, while remaining a fast, scriptable convenience tool for experienced users. Exposes a small, safe subset of Git (status, commit, push, a single annotated tag, single-file restore, and 'gitignore' assistance) through a local plumber2 server and a precompiled browser UI, and refuses to automate anything that requires human judgment.
 }
 \seealso{

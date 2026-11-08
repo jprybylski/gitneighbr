@@ -38,7 +38,7 @@
 #' without a real race.
 #' @noRd
 .test_api <- function(repo_root, git_bin = unname(Sys.which("git")), token = "test-session-token",
-                       www_dir = NULL, session_state = NULL, env = parent.frame()) {
+                       www_dir = NULL, session_state = NULL, base_path = "/", env = parent.frame()) {
   if (is.null(www_dir)) {
     www_dir <- withr::local_tempdir(.local_envir = env)
   }
@@ -49,7 +49,10 @@
   port <- NULL
   for (attempt in 1:5) {
     port <- gitneighbr:::.find_free_port()
-    app <- gitneighbr:::.build_api(repo_root, git_bin, token, port, www_dir = www_dir, session_state = session_state)
+    app <- gitneighbr:::.build_api(
+      repo_root, git_bin, token, port,
+      www_dir = www_dir, session_state = session_state, base_path = base_path
+    )
     server <- tryCatch(
       plumber2::api_run(app, host = "127.0.0.1", port = port, block = FALSE, silent = TRUE),
       error = function(e) NULL

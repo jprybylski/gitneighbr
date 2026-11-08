@@ -208,12 +208,46 @@
     CONFLICTED: "Conflicted",
   };
 
+  // Standalone sessions open with the token in the URL fragment (spec Sec
+  // 12.2). Read it once, then drop it from the address bar and history so
+  // it can't be copied, bookmarked or shared by accident. It is kept in this
+  // tab's sessionStorage (gone when the tab closes, never shared with other
+  // tabs) so reloading the page still works.
+  const TOKEN_KEY = "gitneighbr.session-token";
+
   function getToken(): string | null {
     const match = window.location.hash.match(/token=([^&]+)/);
-    return match ? decodeURIComponent(match[1]) : null;
+    if (!match) {
+      try {
+        return sessionStorage.getItem(TOKEN_KEY);
+      } catch {
+        return null;
+      }
+    }
+    const value = decodeURIComponent(match[1]);
+    try {
+      sessionStorage.setItem(TOKEN_KEY, value);
+    } catch {
+      // Storage may be blocked; the token still works until a reload.
+    }
+    try {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    } catch {
+      // A sandboxed frame may refuse; the token still works for this page.
+    }
+    return value;
   }
 
   const token = getToken();
+
+  // A managed session (run by a launcher) gets its token from the
+  // launcher's proxy on every request; the page holds none. Learned from
+  // the public health route before the first status call.
+  let managed = false;
+
+  function authHeaders(): Record<string, string> {
+    return managed || !token ? {} : { Authorization: `Bearer ${token}` };
+  }
 
   // Dark mode (issue: simple theme toggle). "system" follows the OS/browser
   // `prefers-color-scheme` (the CSS handles that case with no JS help at
@@ -403,7 +437,7 @@
     connectingGitHub = true;
     githubConnectError = null;
     try {
-      const res = await postApi<{ connected: boolean; user: GitHubUser }>("/api/v1/github/connect", {
+      const res = await postApi<{ connected: boolean; user: GitHubUser }>("api/v1/github/connect", {
         token: githubToken.trim(),
       });
       if (!res.ok) {
@@ -422,7 +456,7 @@
 
   async function disconnectGitHub() {
     try {
-      await postApi("/api/v1/github/disconnect", {});
+      await postApi("api/v1/github/disconnect", {});
       await loadStatus();
     } catch {
       // best-effort
@@ -446,7 +480,7 @@
     creatingPR = true;
     prError = null;
     try {
-      const res = await postApi<PullRequestResult>("/api/v1/pull-request", {
+      const res = await postApi<PullRequestResult>("api/v1/pull-request", {
         target_branch: status?.branch || "main",
         pr_branch: prBranch.trim(),
         title: prTitle.trim(),
@@ -481,7 +515,7 @@
     creatingRelease = true;
     releaseError = null;
     try {
-      const res = await postApi<ReleaseResult>("/api/v1/github/release", {
+      const res = await postApi<ReleaseResult>("api/v1/github/release", {
         tag_name: releaseTag.trim(),
         name: releaseTitle.trim() || releaseTag.trim(),
         body: releaseBody.trim(),
@@ -551,7 +585,7 @@
 
   async function api<T>(path: string): Promise<Envelope<T>> {
     const res = await fetch(path, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(),
     });
     const envelope = (await res.json()) as Envelope<T>;
     if (envelope.status_version != null) statusVersion = envelope.status_version;
@@ -566,7 +600,7 @@
     const res = await fetch(path, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...authHeaders(),
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ ...body, status_version: statusVersion }),
@@ -596,13 +630,13 @@
   }
 
   async function refresh() {
-    if (!token || statusRequestInFlight) return;
+    if ((!managed && !token) || statusRequestInFlight) return;
     statusRequestInFlight = true;
     try {
       const [statusEnvelope, changesEnvelope, identityEnvelope] = await Promise.all([
-        api<StatusData>("/api/v1/status"),
-        api<{ changes: ChangeEntry[] }>("/api/v1/changes"),
-        api<IdentityData>("/api/v1/identity"),
+        api<StatusData>("api/v1/status"),
+        api<{ changes: ChangeEntry[] }>("api/v1/changes"),
+        api<IdentityData>("api/v1/identity"),
       ]);
 
       if (!statusEnvelope.ok || !statusEnvelope.data) {
@@ -615,7 +649,7 @@
       if (status?.primary_state === "AUTH_REQUIRED") {
         if (!credentialDiagnosisLoaded) {
           credentialDiagnosisLoaded = true;
-          const diagEnvelope = await api<CredentialDiagnosis>("/api/v1/credential-diagnosis");
+          const diagEnvelope = await api<CredentialDiagnosis>("api/v1/credential-diagnosis");
           if (diagEnvelope.ok && diagEnvelope.data) credentialDiagnosis = diagEnvelope.data;
         }
       } else {
@@ -644,7 +678,13 @@
   }
 
   async function loadStatus() {
-    if (!token) {
+    try {
+      const health = await (await fetch("api/v1/health")).json();
+      managed = health?.data?.managed === true;
+    } catch {
+      managed = false;
+    }
+    if (!managed && !token) {
       errorMessage = { message: "Missing session token. Open this page via gitneighbr::open_repo()." };
       loading = false;
       return;
@@ -686,7 +726,7 @@
   async function createVersionTag() {
     tagError = null;
     const name = tagName.trim();
-    const envelope = await postApi<{ name: string; sha: string }>("/api/v1/tag", {
+    const envelope = await postApi<{ name: string; sha: string }>("api/v1/tag", {
       name,
       annotation: tagAnnotation.trim() || undefined,
     });
@@ -716,7 +756,7 @@
     const shouldTag = markAsVersion && tagName.trim().length > 0;
     committing = true;
     try {
-      const envelope = await postApi<{ sha: string; summary: string }>("/api/v1/commit", {
+      const envelope = await postApi<{ sha: string; summary: string }>("api/v1/commit", {
         paths: Array.from(selected),
         summary: summary.trim(),
         details: details.trim() || undefined,
@@ -757,7 +797,7 @@
   async function pushVersionTag(name: string) {
     tagPushError = null;
     canRetryTagPush = false;
-    const envelope = await postApi<{ remote: string; name: string }>("/api/v1/push-tag", { name });
+    const envelope = await postApi<{ remote: string; name: string }>("api/v1/push-tag", { name });
     if (!envelope.ok) {
       tagPushError = envelope.error ?? { message: "Could not send this version label to GitHub." };
       canRetryTagPush = true;
@@ -770,13 +810,13 @@
     canRetrySend = false;
     sending = true;
     try {
-      const refreshEnvelope = await postApi<Omit<StatusData, "repository">>("/api/v1/refresh-remote", {});
+      const refreshEnvelope = await postApi<Omit<StatusData, "repository">>("api/v1/refresh-remote", {});
       if (!refreshEnvelope.ok) {
         sendError = refreshEnvelope.error ?? { message: "Could not check GitHub for updates before sending." };
         canRetrySend = true;
         return;
       }
-      const pushEnvelope = await postApi<PushResult>("/api/v1/push", {});
+      const pushEnvelope = await postApi<PushResult>("api/v1/push", {});
       if (!pushEnvelope.ok || !pushEnvelope.data) {
         sendError = pushEnvelope.error ?? { message: "Could not send this snapshot to GitHub." };
         canRetrySend = true;
@@ -827,7 +867,7 @@
     diffLoading = true;
     await focusDiffPane();
     try {
-      const envelope = await api<DiffData>(`/api/v1/diff?path=${encodeURIComponent(path)}`);
+      const envelope = await api<DiffData>(`api/v1/diff?path=${encodeURIComponent(path)}`);
       if (!envelope.ok || !envelope.data) {
         diffError = envelope.error ?? { message: "Could not load this diff." };
       } else {
@@ -862,7 +902,7 @@
     rowSuccess = null;
     rowBusyPath = path;
     try {
-      const envelope = await postApi<{ path: string }>("/api/v1/restore", { path });
+      const envelope = await postApi<{ path: string }>("api/v1/restore", { path });
       if (!envelope.ok) {
         rowError = envelope.error ?? { message: "Could not restore this file." };
       } else {
@@ -896,7 +936,7 @@
     rowSuccess = null;
     rowBusyPath = path;
     try {
-      const envelope = await postApi<{ path: string }>("/api/v1/trash", { path });
+      const envelope = await postApi<{ path: string }>("api/v1/trash", { path });
       if (!envelope.ok) {
         rowError = envelope.error ?? { message: "Could not move this file to the trash." };
       } else {
@@ -929,7 +969,7 @@
     rowSuccess = null;
     rowBusyPath = path;
     try {
-      const envelope = await postApi<{ path: string; rule: string; added: boolean }>("/api/v1/ignore", { path });
+      const envelope = await postApi<{ path: string; rule: string; added: boolean }>("api/v1/ignore", { path });
       if (!envelope.ok || !envelope.data) {
         rowError = envelope.error ?? { message: "Could not update .gitignore." };
       } else {
@@ -956,7 +996,7 @@
     updateSuccess = null;
     updating = true;
     try {
-      const envelope = await postApi<UpdateResult>("/api/v1/update", {});
+      const envelope = await postApi<UpdateResult>("api/v1/update", {});
       if (!envelope.ok || !envelope.data) {
         updateError = envelope.error ?? { message: "Could not get updates from GitHub." };
       } else {
@@ -1013,7 +1053,7 @@
     diagnosticLoading = true;
     diagnosticError = null;
     try {
-      const envelope = await api<{ report: DiagnosticReport }>("/api/v1/diagnostic-report");
+      const envelope = await api<{ report: DiagnosticReport }>("api/v1/diagnostic-report");
       if (!envelope.ok || !envelope.data) {
         diagnosticError = envelope.error ?? { message: "Could not generate a diagnostic report." };
         return;
@@ -1037,7 +1077,7 @@
     authRetrying = true;
     authRetryError = null;
     try {
-      const envelope = await postApi<Omit<StatusData, "repository">>("/api/v1/refresh-remote", {});
+      const envelope = await postApi<Omit<StatusData, "repository">>("api/v1/refresh-remote", {});
       if (!envelope.ok) {
         authRetryError = envelope.error ?? { message: "Still could not connect to GitHub." };
         if (envelope.error?.diagnosis) credentialDiagnosis = envelope.error.diagnosis;
@@ -1062,7 +1102,7 @@
     identitySuccess = null;
     identitySaving = true;
     try {
-      const envelope = await postApi<{ name: string; email: string; scope: string }>("/api/v1/identity", {
+      const envelope = await postApi<{ name: string; email: string; scope: string }>("api/v1/identity", {
         name: identityName.trim(),
         email: identityEmail.trim(),
         scope: identityLocalOnly ? "local" : "global",
@@ -1088,7 +1128,7 @@
     initError = null;
     initializing = true;
     try {
-      const envelope = await postApi<Record<string, never>>("/api/v1/init", {});
+      const envelope = await postApi<Record<string, never>>("api/v1/init", {});
       if (!envelope.ok) {
         initError = envelope.error ?? { message: "Could not initialize a Git repository here." };
         return;
@@ -1109,7 +1149,7 @@
     cloneError = null;
     cloning = true;
     try {
-      const envelope = await postApi<Record<string, never>>("/api/v1/clone", { url: cloneUrl.trim() });
+      const envelope = await postApi<Record<string, never>>("api/v1/clone", { url: cloneUrl.trim() });
       if (!envelope.ok) {
         cloneError = envelope.error ?? { message: "Could not clone that repository." };
         return;
@@ -1135,7 +1175,7 @@
     }
     publishing = true;
     try {
-      const envelope = await postApi<PushResult>("/api/v1/publish", { url: publishUrl.trim(), force });
+      const envelope = await postApi<PushResult>("api/v1/publish", { url: publishUrl.trim(), force });
       if (!envelope.ok || !envelope.data) {
         if (envelope.error?.code === "REMOTE_ALREADY_SET") {
           const existingUrl = (envelope.data as unknown as { existing_url?: string } | null)?.existing_url;
@@ -1172,7 +1212,7 @@
     diffLoading = true;
     try {
       const envelope = await api<DiffData>(
-        `/api/v1/diff?path=${encodeURIComponent(path)}&offset_lines=${offset}`,
+        `api/v1/diff?path=${encodeURIComponent(path)}&offset_lines=${offset}`,
       );
       if (envelope.ok && envelope.data && diff) {
         diff = { ...envelope.data, lines: [...diff.lines, ...envelope.data.lines] };
