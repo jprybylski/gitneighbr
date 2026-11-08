@@ -1,4 +1,4 @@
-# gitneighbr (development version)
+# gitneighbr 0.2.1
 
 * Managed mode: the status summary no longer mentions GitHub. With sending on, it counts snapshots not yet sent and those waiting on "the shared copy"; with sending off, it shows only what isn't in a snapshot yet.
 
