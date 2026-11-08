@@ -13,6 +13,9 @@
 .start_managed <- function(repo_dir, git, args = character(), env = parent.frame(),
                            api_token = strrep("a", 32), shutdown_token = strrep("s", 32)) {
   testthat::skip_on_cran()
+  # covr's instrumented install can't be loaded by a separate Rscript, and a
+  # child's coverage isn't recorded anyway; R CMD check and devtools::test run these.
+  testthat::skip_if(identical(Sys.getenv("R_COVR"), "true"), "child processes under covr")
   root <- testthat::test_path("..", "..")
   port <- gitneighbr:::.find_free_port()
   # From a source tree (devtools::test) load it; under R CMD check the tests
