@@ -76,10 +76,26 @@
 #'   route.
 #' @param features Comma-separated features to offer (see Details). Always
 #'   includes `"local"`.
+#' @param git_config The only Git configuration file read besides the
+#'   repository's own, and where the identity form saves a name and email. A
+#'   launcher passes a file it owns, outside the folder. Without it a
+#'   temporary file is used and identity lasts for this session only.
+#' @param pass_env Names of environment variables (besides a small fixed set
+#'   such as `HOME`, `PATH` and the locale) to pass to Git unchanged.
+#'
+#' @section Git in a managed session:
+#' Git runs with no system or user configuration, no inherited `GIT_*` or
+#' `SSH_*` variables, hooks, fsmonitor, pagers, signing and credential
+#' helpers switched off, external diff and text-conversion programs off,
+#' and HTTPS as the only transport. A repository whose own settings or
+#' attributes need anything else (a filter such as Git LFS, an include, an
+#' unknown setting), that lives inside another repository, or that reads
+#' from outside its folder is shown as unsupported and can't be changed.
 #' @return Invisibly, `0L` once the server has stopped.
 #' @export
 gitneighbr_serve <- function(repo, port, git, api_token, host = "127.0.0.1", base_path = "/",
-                             shutdown_token = NULL, features = "local") {
+                             shutdown_token = NULL, features = "local", git_config = NULL,
+                             pass_env = character()) {
   .assert_loopback_host(host)
   port <- suppressWarnings(as.integer(port))
   if (length(port) != 1L || is.na(port) || port < 1L || port > 65535L) {
@@ -100,10 +116,24 @@ gitneighbr_serve <- function(repo, port, git, api_token, host = "127.0.0.1", bas
     stop("`api_token` is required.", call. = FALSE)
   }
 
+  pass_env <- as.character(pass_env)
+  if (any(!grepl("^[A-Za-z_][A-Za-z0-9_]*$", pass_env)) || any(grepl("^(GIT|SSH)_", pass_env))) {
+    stop("`pass_env` must name environment variables other than GIT_* and SSH_*.", call. = FALSE)
+  }
+  if (is.null(git_config)) {
+    git_config <- tempfile("gitneighbr-", fileext = ".gitconfig")
+  } else if (!.is_absolute_path(git_config) || dir.exists(git_config) || !dir.exists(dirname(git_config))) {
+    stop("`git_config` must be an absolute file path in an existing folder.", call. = FALSE)
+  }
+
   repo_root <- as.character(fs::path_real(repo))
+  if (startsWith(paste0(.real_path(dirname(git_config)), "/"), paste0(repo_root, "/"))) {
+    stop("`git_config` must be outside the folder being served.", call. = FALSE)
+  }
   base_path <- .normalize_base_path(base_path)
   managed <- .managed_config(shutdown_token = shutdown_token, features = features)
-  api <- .build_api(repo_root, git, api_token, port, base_path = base_path, managed = managed)
+  git_bin <- .managed_git(git, git_config, pass_env = pass_env, remote = "remote" %in% managed$features)
+  api <- .build_api(repo_root, git_bin, api_token, port, base_path = base_path, managed = managed)
   .serve_run(api, host, port, base_path, managed$control)
 }
 
@@ -151,4 +181,31 @@ gitneighbr_serve <- function(repo, port, git, api_token, host = "127.0.0.1", bas
     interrupt = function(e) invisible(NULL)
   )
   invisible(0L)
+}
+
+#' The features each route needs (routes not listed need `local`)
+#' @noRd
+.ROUTE_FEATURES <- list(
+  "api/v1/refresh-remote" = "remote",
+  "api/v1/push" = "remote",
+  "api/v1/update" = "remote",
+  "api/v1/publish" = "remote",
+  "api/v1/credential-diagnosis" = "remote",
+  "api/v1/tag" = "tags",
+  "api/v1/push-tag" = c("tags", "remote"),
+  "api/v1/restore" = "restore",
+  "api/v1/trash" = "trash",
+  "api/v1/clone" = c("clone", "remote"),
+  "api/v1/github/status" = "github",
+  "api/v1/github/connect" = "github",
+  "api/v1/github/disconnect" = "github",
+  "api/v1/github/release" = c("github", "remote"),
+  "api/v1/github/releases" = "github",
+  "api/v1/pull-request" = c("github", "remote")
+)
+
+#' The features a route needs
+#' @noRd
+.route_features <- function(path) {
+  .ROUTE_FEATURES[[path]] %||% "local"
 }

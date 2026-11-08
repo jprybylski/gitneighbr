@@ -12,7 +12,9 @@ gitneighbr_serve(
   host = "127.0.0.1",
   base_path = "/",
   shutdown_token = NULL,
-  features = "local"
+  features = "local",
+  git_config = NULL,
+  pass_env = character()
 )
 }
 \arguments{
@@ -34,6 +36,14 @@ route.}
 
 \item{features}{Comma-separated features to offer (see Details). Always
 includes \code{"local"}.}
+
+\item{git_config}{The only Git configuration file read besides the
+repository's own, and where the identity form saves a name and email. A
+launcher passes a file it owns, outside the folder. Without it a
+temporary file is used and identity lasts for this session only.}
+
+\item{pass_env}{Names of environment variables (besides a small fixed set
+such as \code{HOME}, \code{PATH} and the locale) to pass to Git unchanged.}
 }
 \value{
 Invisibly, \code{0L} once the server has stopped.
@@ -54,3 +64,14 @@ itself never sees it.
 \code{inst/scripts/serve.R} is the command-line form of this function; see
 \code{vignette("launcher")}.
 }
+\section{Git in a managed session}{
+
+Git runs with no system or user configuration, no inherited \verb{GIT_*} or
+\verb{SSH_*} variables, hooks, fsmonitor, pagers, signing and credential
+helpers switched off, external diff and text-conversion programs off,
+and HTTPS as the only transport. A repository whose own settings or
+attributes need anything else (a filter such as Git LFS, an include, an
+unknown setting), that lives inside another repository, or that reads
+from outside its folder is shown as unsupported and can't be changed.
+}
+

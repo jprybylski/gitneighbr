@@ -194,7 +194,12 @@
       guidance <- c(guidance, .https_helper_guidance(platform))
     }
   } else if (identical(transport, "ssh")) {
-    agent <- .ssh_agent_status()
+    # A managed session never runs SSH (or ssh-add from PATH): HTTPS only.
+    agent <- if (.is_managed_git(git_bin)) {
+      list(has_keys = FALSE, detail = "SSH addresses aren't supported here. Use the repository's HTTPS address instead.")
+    } else {
+      .ssh_agent_status()
+    }
     checks$ssh_agent <- if (isTRUE(agent$has_keys)) {
       .doctor_check(
         "ssh_agent", "ok",

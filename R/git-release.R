@@ -2,8 +2,7 @@
 #' @noRd
 .git_tag_annotation <- function(repo_root, git_bin, tag_name) {
   result <- tryCatch(
-    processx::run(
-      git_bin, c("-C", repo_root, "tag", "-l", "--format=%(contents)", tag_name),
+    .git_exec(git_bin, c("-C", repo_root, "tag", "-l", "--format=%(contents)", tag_name),
       error_on_status = FALSE, timeout = 5
     ),
     error = function(e) NULL
@@ -53,7 +52,7 @@
 
   remote_url <- NULL
   rem_res <- tryCatch(
-    processx::run(git_bin, c("-C", repo_root, "config", "--get", "remote.origin.url"), error_on_status = FALSE, timeout = 5),
+    .git_exec(git_bin, c("-C", repo_root, "config", "--get", "remote.origin.url"), error_on_status = FALSE, timeout = 5),
     error = function(e) NULL
   )
   if (!is.null(rem_res) && identical(rem_res$status, 0L)) {
@@ -147,7 +146,7 @@
                                api_base = NULL, gh_bin = Sys.which("gh")) {
   remote_url <- NULL
   rem_res <- tryCatch(
-    processx::run(git_bin, c("-C", repo_root, "config", "--get", "remote.origin.url"), error_on_status = FALSE, timeout = 5),
+    .git_exec(git_bin, c("-C", repo_root, "config", "--get", "remote.origin.url"), error_on_status = FALSE, timeout = 5),
     error = function(e) NULL
   )
   if (!is.null(rem_res) && identical(rem_res$status, 0L)) {

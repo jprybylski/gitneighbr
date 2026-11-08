@@ -284,14 +284,14 @@
       policy <- .read_repo_policy(repo_root)
     }
     rem_res <- tryCatch(
-      processx::run(git_bin, c("-C", repo_root, "config", "--get", "remote.origin.url"), error_on_status = FALSE, timeout = 5),
+      .git_exec(git_bin, c("-C", repo_root, "config", "--get", "remote.origin.url"), error_on_status = FALSE, timeout = 5),
       error = function(e) NULL
     )
     if (!is.null(rem_res) && identical(rem_res$status, 0L)) {
       remote_url <- trimws(rem_res$stdout)
     }
     head_res <- tryCatch(
-      processx::run(git_bin, c("-C", repo_root, "rev-parse", "--abbrev-ref", "HEAD"), error_on_status = FALSE, timeout = 5),
+      .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--abbrev-ref", "HEAD"), error_on_status = FALSE, timeout = 5),
       error = function(e) NULL
     )
     if (!is.null(head_res) && identical(head_res$status, 0L)) {
@@ -336,5 +336,18 @@
     user = user,
     branch_protected = branch_protected,
     gh_cli_available = nzchar(gh_bin)
+  )
+}
+
+#' The GitHub status of a session without the `github` feature
+#'
+#' Same shape as `.github_api_status()`, computed without running anything.
+#' @noRd
+.github_status_off <- function() {
+  list(
+    is_github = FALSE, is_enterprise = FALSE, host = NULL, api_base = NULL,
+    owner = NULL, repo = NULL, remote_url = NULL, connected = FALSE,
+    token_source = NULL, user = NULL, branch_protected = FALSE,
+    gh_cli_available = FALSE
   )
 }

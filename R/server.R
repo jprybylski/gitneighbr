@@ -151,6 +151,8 @@
   }
 
   features <- if (is.null(managed)) .MANAGED_FEATURES else managed$features
+  session_state$features <- features
+  session_state$managed <- !is.null(managed)
 
   # Every route goes through this: Host, cross-site and token checks run
   # before the handler (which repeats the Host and token checks itself; that
@@ -191,6 +193,13 @@
   # needs a real repository to operate on; this returns an error envelope
   # for those, or `NULL` when the request may proceed.
   require_existing_repo <- function() {
+    if (!is.null(managed)) {
+      check <- .managed_repo_check(repo_root, git_bin)
+      if (identical(check$state, "worktree")) {
+        return(NULL)
+      }
+      return(.error_envelope(check$code, check$message, recoverable = FALSE, data = list(detail = check$detail)))
+    }
     if (!identical(.git_repo_kind(repo_root, git_bin), "worktree")) {
       return(.error_envelope(
         "NOT_REPOSITORY", "This folder isn't a Git project yet.",
@@ -254,14 +263,14 @@
   # Every route is registered under each prefix: "/" for direct use and
   # prefix-stripping proxies, and `base_path` for proxies that forward the
   # full path. Paths here are relative ("api/v1/...").
-  route_get <- function(api, path, handler, public = FALSE, feature = NULL) {
-    handler <- guard(handler, public = public, feature = feature)
+  route_get <- function(api, path, handler, public = FALSE) {
+    handler <- guard(handler, public = public, feature = if (!public) .route_features(path))
     for (prefix in prefixes) {
       api <- plumber2::api_get(api, paste0(prefix, path), handler)
     }
     api
   }
-  route_post <- function(api, path, handler, feature = NULL) {
+  route_post <- function(api, path, handler, feature = .route_features(path)) {
     handler <- guard(handler, feature = feature)
     for (prefix in prefixes) {
       api <- plumber2::api_post(api, paste0(prefix, path), handler)
@@ -276,7 +285,7 @@
     if (is.null(managed) || is.null(managed$shutdown_token)) {
       return(api)
     }
-    route_post(api, "api/v1/shutdown", function(request, response) {
+    route_post(api, "api/v1/shutdown", feature = NULL, handler = function(request, response) {
       supplied <- request$get_header(.MANAGED_SHUTDOWN_HEADER) %||% ""
       if (!.tokens_match(supplied, managed$shutdown_token)) {
         plumber2::abort_forbidden("Missing or invalid shutdown token.")
@@ -577,6 +586,16 @@
       }
       on.exit(release_mutation_lock(), add = TRUE)
 
+      # The repository policy is enforced here, not only by disabled buttons.
+      capabilities <- .status_payload(repo_root, git_bin, session_state)$data$capabilities
+      if (isTRUE(capabilities$requires_pull_request)) {
+        response$status <- 403L
+        return(.error_envelope(
+          "PULL_REQUEST_REQUIRED",
+          "This branch only accepts changes through a pull request.",
+          recoverable = FALSE
+        ))
+      }
       result <- .git_push_current_branch(repo_root, git_bin)
       note_auth_result(result)
       payload <- .status_payload(repo_root, git_bin, session_state)
@@ -809,6 +828,14 @@
       }
       on.exit(release_mutation_lock(), add = TRUE)
 
+      if (isTRUE(.read_repo_policy(repo_root)$disallow_untracked_trash)) {
+        response$status <- 403L
+        return(.error_envelope(
+          "TRASH_DISALLOWED",
+          "This repository's policy doesn't allow removing files from here.",
+          recoverable = FALSE
+        ))
+      }
       result <- .git_trash_untracked_file(repo_root, git_bin, path = body$path)
       payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {
@@ -889,6 +916,18 @@
       }
       on.exit(release_mutation_lock(), add = TRUE)
 
+      # A managed session initializes only its own folder, and only when
+      # that folder is in no repository at all (not one above it).
+      if (!is.null(managed)) {
+        check <- .managed_repo_check(repo_root, git_bin)
+        if (!identical(check$state, "not_a_repository")) {
+          return(.error_envelope(
+            check$code %||% "ALREADY_REPOSITORY",
+            check$message %||% "This folder is already a Git project.",
+            recoverable = FALSE
+          ))
+        }
+      }
       result <- .git_init_workspace(repo_root, git_bin)
       payload <- .status_payload(repo_root, git_bin, session_state)
       if (!isTRUE(result$ok)) {

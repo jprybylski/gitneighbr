@@ -18,12 +18,17 @@ usage <- paste0(
   "  --base-path=PATH           path a reverse proxy serves the app under\n",
   "  --shutdown-token-env=NAME  environment variable holding the shutdown token\n",
   "  --features=LIST            comma list: local (default), remote, tags, restore,\n",
-  "                             trash, clone, github\n"
+  "                             trash, clone, github\n",
+  "  --git-config=PATH          Git configuration file to use (outside the folder)\n",
+  "  --pass-env=LIST            comma list of extra environment variables for Git\n"
 )
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-KNOWN <- c("repo", "port", "git", "api-token-env", "host", "base-path", "shutdown-token-env", "features")
+KNOWN <- c(
+  "repo", "port", "git", "api-token-env", "host", "base-path", "shutdown-token-env", "features",
+  "git-config", "pass-env"
+)
 REQUIRED <- c("repo", "port", "git", "api-token-env")
 
 fail <- function(...) {
@@ -85,7 +90,9 @@ status <- tryCatch(
     host = args[["host"]] %||% "127.0.0.1",
     base_path = args[["base-path"]] %||% "/",
     shutdown_token = shutdown_token,
-    features = args[["features"]] %||% "local"
+    features = args[["features"]] %||% "local",
+    git_config = args[["git-config"]],
+    pass_env = if (is.null(args[["pass-env"]])) character() else strsplit(args[["pass-env"]], ",", fixed = TRUE)[[1]]
   ),
   error = function(e) fail(conditionMessage(e))
 )

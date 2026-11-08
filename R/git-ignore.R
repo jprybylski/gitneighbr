@@ -31,8 +31,7 @@
 #' 5 ("duplicate effective rules are not added") asks for.
 #' @noRd
 .git_path_effectively_ignored <- function(repo_root, git_bin, path) {
-  result <- processx::run(
-    git_bin, c("-C", repo_root, "check-ignore", "-q", "--", path),
+  result <- .git_exec(git_bin, c("-C", repo_root, "check-ignore", "-q", "--", path),
     error_on_status = FALSE, timeout = 15
   )
   identical(result$status, 0L)

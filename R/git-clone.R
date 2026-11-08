@@ -74,7 +74,7 @@
   }
 
   clone_args <- c("clone", url, workspace_path)
-  result <- processx::run(git_bin, clone_args, error_on_status = FALSE, timeout = 300)
+  result <- .git_exec(git_bin, clone_args, error_on_status = FALSE, timeout = 300)
   if (!identical(result$status, 0L)) {
     return(list(
       ok = FALSE, code = .classify_clone_failure(result$stderr),

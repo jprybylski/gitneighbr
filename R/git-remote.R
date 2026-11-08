@@ -9,12 +9,10 @@
 #'   `branch` has no upstream configured.
 #' @noRd
 .git_upstream_info <- function(repo_root, git_bin, branch) {
-  remote_result <- processx::run(
-    git_bin, c("-C", repo_root, "config", "--get", paste0("branch.", branch, ".remote")),
+  remote_result <- .git_exec(git_bin, c("-C", repo_root, "config", "--get", paste0("branch.", branch, ".remote")),
     error_on_status = FALSE, timeout = 5
   )
-  merge_result <- processx::run(
-    git_bin, c("-C", repo_root, "config", "--get", paste0("branch.", branch, ".merge")),
+  merge_result <- .git_exec(git_bin, c("-C", repo_root, "config", "--get", paste0("branch.", branch, ".merge")),
     error_on_status = FALSE, timeout = 5
   )
   if (!identical(remote_result$status, 0L) || !identical(merge_result$status, 0L)) {
@@ -110,8 +108,7 @@
   }
 
   fetch_args <- c("-C", repo_root, "fetch", upstream_info$remote)
-  fetch_result <- processx::run(
-    git_bin, fetch_args,
+  fetch_result <- .git_exec(git_bin, fetch_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
@@ -158,8 +155,7 @@
   }
 
   fetch_args <- c("-C", repo_root, "fetch", upstream_info$remote)
-  fetch_result <- processx::run(
-    git_bin, fetch_args,
+  fetch_result <- .git_exec(git_bin, fetch_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
@@ -193,8 +189,7 @@
 
   refspec <- paste0(status$branch, ":", upstream_info$branch)
   push_args <- c("-C", repo_root, "push", upstream_info$remote, refspec)
-  push_result <- processx::run(
-    git_bin, push_args,
+  push_result <- .git_exec(git_bin, push_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(push_result$status, 0L)) {
@@ -207,8 +202,7 @@
     ))
   }
 
-  sha <- trimws(processx::run(
-    git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"),
+  sha <- trimws(.git_exec(git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"),
     error_on_status = TRUE, timeout = 15
   )$stdout)
 
@@ -273,8 +267,7 @@
   }
 
   fetch_args <- c("-C", repo_root, "fetch", upstream_info$remote)
-  fetch_result <- processx::run(
-    git_bin, fetch_args,
+  fetch_result <- .git_exec(git_bin, fetch_args,
     error_on_status = FALSE, timeout = 60
   )
   if (!identical(fetch_result$status, 0L)) {
@@ -301,8 +294,7 @@
 
   remote_ref <- paste0("refs/remotes/", upstream_info$remote, "/", upstream_info$branch)
   merge_args <- c("-C", repo_root, "merge", "--ff-only", remote_ref)
-  merge_result <- processx::run(
-    git_bin, merge_args,
+  merge_result <- .git_exec(git_bin, merge_args,
     error_on_status = FALSE, timeout = 30
   )
   if (!identical(merge_result$status, 0L)) {
@@ -313,8 +305,7 @@
     ))
   }
 
-  sha <- trimws(processx::run(
-    git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"),
+  sha <- trimws(.git_exec(git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"),
     error_on_status = TRUE, timeout = 15
   )$stdout)
 
@@ -392,7 +383,7 @@
   } else {
     c("-C", repo_root, "remote", "set-url", "origin", url)
   }
-  remote_result <- processx::run(git_bin, remote_args, error_on_status = FALSE, timeout = 15)
+  remote_result <- .git_exec(git_bin, remote_args, error_on_status = FALSE, timeout = 15)
   if (!identical(remote_result$status, 0L)) {
     return(list(
       ok = FALSE, code = "COMMAND_FAILED",
@@ -402,7 +393,7 @@
   }
 
   push_args <- c("-C", repo_root, "push", "-u", "origin", status$branch)
-  push_result <- processx::run(git_bin, push_args, error_on_status = FALSE, timeout = 60)
+  push_result <- .git_exec(git_bin, push_args, error_on_status = FALSE, timeout = 60)
   if (!identical(push_result$status, 0L)) {
     code <- .classify_push_failure(push_result$stderr)
     message <- if (identical(code, "REMOTE_AHEAD")) {
@@ -420,16 +411,14 @@
     ))
   }
 
-  sha <- trimws(processx::run(
-    git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"),
+  sha <- trimws(.git_exec(git_bin, c("-C", repo_root, "rev-parse", "--short", "HEAD"),
     error_on_status = TRUE, timeout = 15
   )$stdout)
   # `status$ahead` is always 0 here: it reflects the branch.ab Git reports
   # against an upstream, and there was none until the push above just set
   # it. Every commit on the branch is new to the remote, since publishing
   # is only reachable with no upstream configured yet.
-  commit_count <- as.integer(trimws(processx::run(
-    git_bin, c("-C", repo_root, "rev-list", "--count", "HEAD"),
+  commit_count <- as.integer(trimws(.git_exec(git_bin, c("-C", repo_root, "rev-list", "--count", "HEAD"),
     error_on_status = TRUE, timeout = 15
   )$stdout))
 

@@ -5,7 +5,7 @@
     return(FALSE)
   }
   result <- tryCatch(
-    processx::run(git_bin, c("--version"), error_on_status = FALSE, timeout = 5),
+    .git_exec(git_bin, c("--version"), error_on_status = FALSE, timeout = 5),
     error = function(e) NULL
   )
   !is.null(result) && identical(result$status, 0L)
@@ -18,9 +18,7 @@
 #' @noRd
 .git_root <- function(path, git_bin) {
   result <- tryCatch(
-    processx::run(
-      git_bin,
-      c("-C", path, "rev-parse", "--show-toplevel"),
+    .git_exec(git_bin, c("-C", path, "rev-parse", "--show-toplevel"),
       error_on_status = FALSE,
       timeout = 5
     ),
@@ -46,9 +44,7 @@
 #'   `has_changes`, `detached`, `unborn`.
 #' @noRd
 .git_status <- function(repo_root, git_bin) {
-  result <- processx::run(
-    git_bin,
-    c("-C", repo_root, "status", "--porcelain=v2", "--branch"),
+  result <- .git_exec(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "--branch"),
     error_on_status = TRUE,
     timeout = 15
   )
