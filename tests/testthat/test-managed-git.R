@@ -230,3 +230,25 @@ test_that("a named Git helper folder is passed before every subcommand", {
   expect_identical(trimws(.git_exec(managed, "--exec-path")$stdout), normalizePath(exec_path, winslash = "/"))
   expect_error(.managed_git(git, tempfile(), exec_path = file.path(tempdir(), "no-such-dir")))
 })
+
+test_that(".managed_repo_check() refuses bare repositories, unreadable .git folders and info/attributes filters", {
+  git <- .managed_test_git()
+  bare <- withr::local_tempdir()
+  processx::run(unname(Sys.which("git")), c("init", "-q", "--bare", bare))
+  expect_identical(.managed_repo_check(bare, git)$code, "BARE_REPOSITORY")
+
+  repo <- .new_test_repo()
+  repo$run("config", "core.bare", "true")
+  expect_identical(.managed_repo_check(repo$dir, git)$state, "unsupported")
+
+  broken <- .new_test_repo()
+  writeLines("[core\n  this is not a config", file.path(broken$dir, ".git", "config"))
+  expect_identical(.managed_repo_check(broken$dir, git)$state, "unsupported")
+
+  info <- .new_test_repo()
+  dir.create(file.path(info$dir, ".git", "info"), showWarnings = FALSE)
+  writeLines("* filter=lfs", file.path(info$dir, ".git", "info", "attributes"))
+  check <- .managed_repo_check(info$dir, git)
+  expect_identical(check$code, "FILTER_ATTRIBUTE")
+  expect_identical(check$detail, ".git/info/attributes")
+})

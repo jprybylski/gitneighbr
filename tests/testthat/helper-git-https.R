@@ -48,11 +48,20 @@
 #' @noRd
 .test_remote_api <- function(repo_root, remote, policy = NULL, env = parent.frame()) {
   config <- withr::local_tempfile(.local_envir = env, fileext = ".gitconfig")
-  writeLines(c("[http]", paste0("\tsslCAInfo = ", remote$cert)), config)
+  .write_ca_config(config, remote$cert)
   if (!is.null(policy)) {
     policy <- gitneighbr:::.validate_launcher_policy(policy)
   }
   managed <- gitneighbr:::.managed_config(features = "local,remote", policy = policy)
   git_bin <- gitneighbr:::.managed_git(remote$git, config, remote = TRUE)
   .test_api(repo_root, git_bin, managed = managed, env = env)
+}
+
+#' A Git config file that trusts `cert`
+#'
+#' Git reads backslashes in a config value as escapes, so a Windows path is
+#' written with forward slashes.
+#' @noRd
+.write_ca_config <- function(config, cert) {
+  writeLines(c("[http]", paste0("\tsslCAInfo = ", normalizePath(cert, winslash = "/"))), config)
 }

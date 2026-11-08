@@ -127,3 +127,44 @@ test_that("init writes only the chosen template rules, and never over an existin
   expect_identical(readLines(file.path(other, ".gitignore")), "mine")
   expect_false(dir.exists(file.path(other, ".git")))
 })
+
+test_that("every malformed policy part is refused", {
+  base <- .example_policy()
+  expect_error(.validate_launcher_policy(list(1, 2)), "JSON object")
+  expect_error(.validate_launcher_policy(utils::modifyList(base, list(protected = "runs/**"))), "list of globs")
+  p <- base
+  p$protected <- list("")
+  expect_error(.validate_launcher_policy(p), "non-empty string")
+  p <- base
+  p$groups[[1]]$id <- "Sources!"
+  expect_error(.validate_launcher_policy(p), "short lower-case id")
+  p <- base
+  p$default_group <- list("other")
+  expect_error(.validate_launcher_policy(p), "must be an object")
+  p <- base
+  p$review[[1]]$colour <- "red"
+  expect_error(.validate_launcher_policy(p), "unknown field")
+  expect_false(.glob_match("a.txt", character()))
+  expect_null(.protected_path("runs/x", NULL))
+  expect_null(.protected_path("notes.md", .validate_launcher_policy(base)))
+})
+
+test_that("only offered ignore rules are written, and never over a .gitignore", {
+  dir <- withr::local_tempdir()
+  policy <- .validate_launcher_policy(.example_policy())
+  expect_identical(.write_ignore_template(dir, policy, list()), list(ok = TRUE, written = FALSE))
+  expect_identical(.write_ignore_template(dir, policy, list("*"))$code, "COMMAND_FAILED")
+  expect_false(file.exists(file.path(dir, ".gitignore")))
+  expect_true(.write_ignore_template(dir, policy, list("*.log"))$written)
+  expect_identical(readLines(file.path(dir, ".gitignore"))[3:4], c("# Logs.", "*.log"))
+  expect_identical(.write_ignore_template(dir, policy, list("*.log"))$code, "GITIGNORE_EXISTS")
+  # A .gitignore that appears while writing is kept, and the temporary file removed.
+  other <- withr::local_tempdir()
+  local_mocked_bindings(file.rename = function(from, to) {
+    writeLines("theirs", to)
+    FALSE
+  }, .package = "base")
+  expect_identical(.write_ignore_template(other, policy, list("*.log"))$code, "GITIGNORE_EXISTS")
+  expect_identical(readLines(file.path(other, ".gitignore")), "theirs")
+  expect_identical(list.files(other, all.files = TRUE, no.. = TRUE), ".gitignore")
+})

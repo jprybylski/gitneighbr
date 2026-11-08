@@ -310,3 +310,35 @@ test_that(".git_commit_selected refuses to commit while conflicts are present", 
   expect_false(result$ok)
   expect_equal(result$code, "CONFLICTS_PRESENT")
 })
+
+test_that(".git_commit_selected saves nothing for a path it can't trust, or when HEAD moves mid-save", {
+  repo <- .new_test_repo()
+  writeLines("a", file.path(repo$dir, "a.txt"))
+  repo$run("add", "a.txt")
+  repo$run("commit", "-q", "-m", "initial commit")
+  head <- function() trimws(processx::run(repo$git, c("-C", repo$dir, "rev-parse", "HEAD"))$stdout)
+  before <- head()
+  writeLines("x", file.path(repo$dir, "x.txt"))
+
+  local({
+    local_mocked_bindings(.commit_path_is_safe = function(...) FALSE)
+    result <- .git_commit_selected(repo$dir, repo$git, "x.txt", summary = "Add x")
+    expect_identical(result$code, "PATH_REJECTED")
+  })
+  expect_identical(head(), before)
+
+  git <- .managed_git(repo$git, config_file = withr::local_tempfile(fileext = ".gitconfig"))
+  real_exec <- gitneighbr:::.git_exec
+  local({
+    # Another writer wins the race: update-ref's compare-and-swap fails.
+    local_mocked_bindings(.git_exec = function(git_bin, args, ...) {
+      if ("update-ref" %in% args) {
+        return(list(status = 1L, stdout = "", stderr = "cannot lock ref 'HEAD'"))
+      }
+      real_exec(git_bin, args, ...)
+    })
+    result <- .git_commit_selected(repo$dir, git, "x.txt", summary = "Add x")
+    expect_identical(result$code, "STATE_CHANGED")
+  })
+  expect_identical(head(), before)
+})

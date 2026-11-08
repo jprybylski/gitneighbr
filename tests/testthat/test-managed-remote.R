@@ -96,6 +96,7 @@ test_that("without a token the destination check fails cleanly and changes nothi
 })
 
 test_that("the token never reaches a command line, the page or an error", {
+  skip_on_os("windows") # the argv-logging stand-in for git is a shell script
   remote <- .local_git_https_remote()
   repo <- .new_test_repo()
   .commit_file(repo, "a.txt", "a")
@@ -105,7 +106,7 @@ test_that("the token never reaches a command line, the page or an error", {
   Sys.chmod(wrapper, "755")
 
   config <- withr::local_tempfile(fileext = ".gitconfig")
-  writeLines(c("[http]", paste0("\tsslCAInfo = ", remote$cert)), config)
+  .write_ca_config(config, remote$cert)
   managed <- .managed_config(features = "local,remote")
   api <- .test_api(repo$dir, .managed_git(wrapper, config, remote = TRUE), managed = managed)
   .connect(api, remote)

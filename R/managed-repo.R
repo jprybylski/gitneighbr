@@ -53,7 +53,10 @@
 
   dotgit <- file.path(repo_root, ".git")
   link <- Sys.readlink(dotgit)
-  if (!is.na(link) && nzchar(link)) {
+  # Sys.readlink() doesn't report every kind of link (Windows junctions), so
+  # also require .git to resolve to this folder's own .git.
+  moved <- dir.exists(dotgit) && !identical(.real_path(dotgit), file.path(.real_path(repo_root), ".git"))
+  if ((!is.na(link) && nzchar(link)) || moved) {
     return(unsupported("GIT_DIR_LINK", "This folder's .git is a link to somewhere else, so it can't be used here."))
   }
   is_dir <- file.info(dotgit)$isdir
