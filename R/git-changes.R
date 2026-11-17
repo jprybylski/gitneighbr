@@ -63,9 +63,12 @@
 #'   which have no single well-defined staged/unstaged split).
 #' @noRd
 .git_status_entries <- function(repo_root, git_bin) {
-  raw <- .run_git_raw(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"))
-  fields <- .split_nul(raw)
+  .status_entries_from_fields(.git_status_fields(repo_root, git_bin))
+}
 
+#' Per-file entries from already-read `git status -z` fields
+#' @noRd
+.status_entries_from_fields <- function(fields) {
   entries <- list()
   i <- 1L
   n <- length(fields)
@@ -257,10 +260,34 @@
 #'   `state` (`"NEW"`, `"CHANGED"`, `"RENAMED"`, `"DELETED"`, or
 #'   `"CONFLICTED"`), `untracked`, `added`, `deleted`, `binary`, `large`.
 #' @noRd
-.git_changes <- function(repo_root, git_bin, max_bytes = getOption("gitneighbr.diff_max_bytes", 200000L)) {
-  status_entries <- .git_status_entries(repo_root, git_bin)
-  staged_map <- .numstat_lookup(.git_numstat(repo_root, git_bin, cached = TRUE))
-  unstaged_map <- .numstat_lookup(.git_numstat(repo_root, git_bin, cached = FALSE))
+.git_changes <- function(repo_root, git_bin, max_bytes = getOption("gitneighbr.diff_max_bytes", 200000L),
+                         fields = NULL, session_state = NULL) {
+  if (is.null(fields)) {
+    fields <- .git_status_fields(repo_root, git_bin)
+  }
+  status_entries <- .status_entries_from_fields(fields)
+  tracked <- Filter(function(e) e$kind %in% c("ordinary", "rename"), status_entries)
+  # Line counts come from two `git diff --numstat` runs. They can only change
+  # when the status itself does (the index object IDs are part of each
+  # record) or when a listed file is edited again, which changes its
+  # signature; otherwise the previous counts are reused.
+  numstat_key <- if (length(tracked) == 0L) {
+    "none"
+  } else {
+    paths <- unlist(lapply(tracked, function(e) c(e$path, e$old_path)), use.names = FALSE)
+    c(fields, .file_sigs(file.path(repo_root, unique(paths))))
+  }
+  maps <- .poll_memo(session_state, "numstat", numstat_key, function() {
+    if (length(tracked) == 0L) {
+      return(list(staged = list(), unstaged = list()))
+    }
+    list(
+      staged = .numstat_lookup(.git_numstat(repo_root, git_bin, cached = TRUE)),
+      unstaged = .numstat_lookup(.git_numstat(repo_root, git_bin, cached = FALSE))
+    )
+  })
+  staged_map <- maps$staged
+  unstaged_map <- maps$unstaged
 
   lapply(status_entries, function(e) {
     if (e$kind == "untracked") {

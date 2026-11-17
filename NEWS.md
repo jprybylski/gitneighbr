@@ -1,3 +1,12 @@
+# gitneighbr (development version)
+
+* The 2-second status poll is much cheaper, for Windows in particular, where each Git process costs tens of milliseconds (#50). A steady poll now starts one Git process instead of about twenty:
+  * the page asks for `api/v1/status?include=changes`, which builds the status and the changed-file list from a single `git status` (`api/v1/changes` still works on its own), and fetches identity only until it has filled the form;
+  * Git's availability, the folder check, identity and other settings, the hooks folder and line counts of files that haven't changed again are remembered for the session. They are read again when the files behind them change, after a minute at most, or after any action gitneighbr takes;
+  * a merge, rebase, cherry-pick or revert in progress is found from Git's marker files, without starting Git.
+
+  Payloads are unchanged.
+
 # gitneighbr 0.2.1
 
 * Managed mode: the status summary no longer mentions GitHub. With sending on, it counts snapshots not yet sent and those waiting on "the shared copy"; with sending off, it shows only what isn't in a snapshot yet.

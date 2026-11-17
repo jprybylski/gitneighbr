@@ -50,8 +50,13 @@
 }
 
 #' Release the single-mutation lock acquired by `.acquire_mutation_lock()`
+#'
+#' Also forgets the status poll's memo (R/poll-cache.R): whatever the
+#' mutation changed is then read afresh on the next poll, however coarse the
+#' file system's timestamps are.
 #' @noRd
 .release_mutation_lock <- function(session_state) {
+  .poll_cache_clear(session_state)
   session_state$mutation_lock <- FALSE
 }
 
@@ -207,15 +212,17 @@
   # haven't run). Every endpoint except health, status, init, and clone
   # needs a real repository to operate on; this returns an error envelope
   # for those, or `NULL` when the request may proceed.
+  # Uses the status poll's memo of the repository check (recomputed while a
+  # mutation holds the lock, so a mutation always checks afresh).
   require_existing_repo <- function() {
+    check <- .cached_repo_check(repo_root, git_bin, session_state, !is.null(managed))$value
     if (!is.null(managed)) {
-      check <- .managed_repo_check(repo_root, git_bin)
       if (identical(check$state, "worktree")) {
         return(NULL)
       }
       return(.error_envelope(check$code, check$message, recoverable = FALSE, data = list(detail = check$detail)))
     }
-    if (!identical(.git_repo_kind(repo_root, git_bin), "worktree")) {
+    if (!identical(check$state, "worktree")) {
       return(.error_envelope(
         "NOT_REPOSITORY", "This folder isn't a Git project yet.",
         recoverable = TRUE
@@ -441,20 +448,33 @@
 
       show_ignored <- identical(request$query$show_ignored, "true")
       payload <- .status_payload(repo_root, git_bin, session_state, show_ignored = show_ignored)
-      .ok_envelope(payload$data, status_version = payload$version)
+      envelope <- .ok_envelope(payload$data, status_version = payload$version)
+      # `?include=changes`: the changed-file list `GET api/v1/changes` would
+      # give, from this same `git status` run, so one poll is one request and
+      # one Git process. `null` when there is no list to show (no Git, or not
+      # a repository the session can work on).
+      if (identical(request$query$include, "changes")) {
+        envelope["changes"] <- list(if (!is.null(payload$fields)) {
+          .annotate_changes(
+            .git_changes(repo_root, git_bin, max_bytes = max_diff_bytes, fields = payload$fields, session_state = session_state),
+            launcher_policy
+          )
+        })
+      }
+      envelope
     }) |>
     route_get("api/v1/changes", function(request) {
       validate_host(request)
       require_auth(request)
 
-      if (!.git_available(git_bin)) {
+      if (!.cached_git_available(git_bin, session_state)) {
         return(.error_envelope("GIT_UNAVAILABLE", "Git isn't available on this computer.", recoverable = FALSE))
       }
       not_a_repo <- require_existing_repo()
       if (!is.null(not_a_repo)) {
         return(not_a_repo)
       }
-      changes <- .git_changes(repo_root, git_bin, max_bytes = max_diff_bytes)
+      changes <- .git_changes(repo_root, git_bin, max_bytes = max_diff_bytes, session_state = session_state)
       .ok_envelope(list(changes = .annotate_changes(changes, launcher_policy)))
     }) |>
     route_get("api/v1/diff", function(request) {

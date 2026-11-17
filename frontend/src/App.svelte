@@ -696,10 +696,12 @@
     if ((!managed && !token) || statusRequestInFlight) return;
     statusRequestInFlight = true;
     try {
-      const [statusEnvelope, changesEnvelope, identityEnvelope] = await Promise.all([
-        api<StatusData>("api/v1/status"),
-        api<{ changes: ChangeEntry[] }>("api/v1/changes"),
-        api<IdentityData>("api/v1/identity"),
+      // One request and one `git status` per poll: the changed-file list
+      // rides along with the status (issue #50). Identity is only needed to
+      // prefill the form, so it is fetched until that has happened once.
+      const [statusEnvelope, identityEnvelope] = await Promise.all([
+        api<StatusData>("api/v1/status?include=changes") as Promise<Envelope<StatusData> & { changes?: ChangeEntry[] | null }>,
+        identityLoaded ? Promise.resolve(null) : api<IdentityData>("api/v1/identity"),
       ]);
 
       if (!statusEnvelope.ok || !statusEnvelope.data) {
@@ -721,14 +723,14 @@
         authRetryError = null;
       }
 
-      if (changesEnvelope.ok && changesEnvelope.data) {
-        selected = reconcileSelection(changes, changesEnvelope.data.changes);
-        changes = changesEnvelope.data.changes;
+      if (statusEnvelope.ok && Array.isArray(statusEnvelope.changes)) {
+        selected = reconcileSelection(changes, statusEnvelope.changes);
+        changes = statusEnvelope.changes;
       }
 
       // Prefill only once: the user may be mid-edit on a later poll, and a
       // background refresh must never clobber what they're typing.
-      if (identityEnvelope.ok && identityEnvelope.data && !identityLoaded) {
+      if (identityEnvelope && identityEnvelope.ok && identityEnvelope.data && !identityLoaded) {
         identityName = identityEnvelope.data.name ?? "";
         identityEmail = identityEnvelope.data.email ?? "";
         identityLoaded = true;

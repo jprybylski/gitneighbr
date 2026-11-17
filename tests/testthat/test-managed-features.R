@@ -32,6 +32,8 @@ test_that("a local-only session never starts gh or reads GitHub tokens while pol
   for (i in 1:5) {
     status <- .api_req(api, "/api/v1/status", headers = .api_auth(api))
     expect_identical(status$status, 200L)
+    combined <- .api_req(api, "/api/v1/status?include=changes", headers = .api_auth(api))
+    expect_identical(combined$status, 200L)
   }
   expect_false(file.exists(log))
   expect_false(status$json$data$github$connected)

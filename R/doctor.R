@@ -110,8 +110,7 @@
 
 #' Names of active (non-`.sample`, executable) hooks in a repository
 #' @noRd
-.active_hooks <- function(repo_root, git_bin) {
-  dir <- .git_hooks_dir(repo_root, git_bin)
+.active_hooks <- function(repo_root, git_bin, dir = .git_hooks_dir(repo_root, git_bin)) {
   if (is.null(dir) || !fs::dir_exists(dir)) {
     return(character())
   }

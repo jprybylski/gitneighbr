@@ -273,9 +273,13 @@
 }
 
 #' Complete GitHub API status diagnosis for a repository
+#'
+#' @param status The poll's parsed `git status` (`NULL` outside a worktree).
+#'   When given, the branch comes from it and the remote address from the
+#'   session's settings memo, instead of two more Git processes.
 #' @noRd
 .github_api_status <- function(repo_root, git_bin = Sys.which("git"), session_state = NULL,
-                               policy = NULL, api_base = NULL, gh_bin = Sys.which("gh")) {
+                               policy = NULL, api_base = NULL, gh_bin = Sys.which("gh"), status = NULL) {
   remote_url <- NULL
   branch <- NULL
 
@@ -283,20 +287,28 @@
     if (is.null(policy)) {
       policy <- .read_repo_policy(repo_root)
     }
-    rem_res <- tryCatch(
-      .git_exec(git_bin, c("-C", repo_root, "config", "--get", "remote.origin.url"), error_on_status = FALSE, timeout = 5),
-      error = function(e) NULL
-    )
-    if (!is.null(rem_res) && identical(rem_res$status, 0L)) {
-      remote_url <- trimws(rem_res$stdout)
+    read_origin <- function() {
+      rem_res <- tryCatch(
+        .git_exec(git_bin, c("-C", repo_root, "config", "--get", "remote.origin.url"), error_on_status = FALSE, timeout = 5),
+        error = function(e) NULL
+      )
+      if (!is.null(rem_res) && identical(rem_res$status, 0L)) trimws(rem_res$stdout)
     }
-    head_res <- tryCatch(
-      .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--abbrev-ref", "HEAD"), error_on_status = FALSE, timeout = 5),
-      error = function(e) NULL
-    )
-    if (!is.null(head_res) && identical(head_res$status, 0L)) {
-      branch <- trimws(head_res$stdout)
-      if (identical(branch, "HEAD")) branch <- NULL
+    if (is.null(status)) {
+      remote_url <- read_origin()
+      head_res <- tryCatch(
+        .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--abbrev-ref", "HEAD"), error_on_status = FALSE, timeout = 5),
+        error = function(e) NULL
+      )
+      if (!is.null(head_res) && identical(head_res$status, 0L)) {
+        branch <- trimws(head_res$stdout)
+        if (identical(branch, "HEAD")) branch <- NULL
+      }
+    } else {
+      remote_url <- .poll_memo(session_state, "origin_url", .config_fingerprint(repo_root, git_bin), read_origin)
+      # `rev-parse --abbrev-ref HEAD` names no branch when detached ("HEAD")
+      # or unborn (it fails).
+      if (!isTRUE(status$detached) && !isTRUE(status$unborn)) branch <- status$branch
     }
   }
 

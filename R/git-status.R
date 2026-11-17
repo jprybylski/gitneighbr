@@ -30,25 +30,57 @@
   fs::path_real(trimws(result$stdout))
 }
 
-#' Run `git status --porcelain=v2 --branch` and parse it
+#' Run `git status --porcelain=v2 -z --branch` once, as NUL-split fields
 #'
-#' Uses an argv array (never a shell string) so paths and branch names can
-#' never be interpreted as shell syntax. Deliberately omits `-z`: R string
-#' values cannot contain embedded NUL bytes, so the NUL-delimited form
-#' cannot be parsed as ordinary R character data. This means paths with
-#' unusual characters get C-style quoted by Git rather than being exposed
-#' as literal bytes; full raw-path fidelity is tracked as a Phase 1 issue.
+#' Uses an argv array (never a shell string). The NUL-delimited form keeps
+#' every path byte-exact; it is read through a file (`.run_git_raw()`) since
+#' R strings can't hold NUL. One run feeds both the summary counts
+#' (`.parse_git_status_fields()`) and the per-file list
+#' (`.status_entries_from_fields()`), so a poll needs a single Git process.
+#' @noRd
+.git_status_fields <- function(repo_root, git_bin) {
+  .split_nul(.run_git_raw(
+    git_bin,
+    c("-C", repo_root, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all")
+  ))
+}
+
+#' Run `git status` and summarise it
 #'
 #' @return A list with `branch`, `upstream`, `ahead`, `behind`,
 #'   `staged_count`, `unstaged_count`, `untracked_count`, `conflicted_count`,
-#'   `has_changes`, `detached`, `unborn`.
+#'   `has_changes`, `detached`, `unborn` and `oid` (the `HEAD` commit, `""`
+#'   when unborn).
 #' @noRd
 .git_status <- function(repo_root, git_bin) {
-  result <- .git_exec(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "--branch", "--untracked-files=all"),
-    error_on_status = TRUE,
-    timeout = 15
-  )
-  .parse_git_status_v2(result$stdout)
+  .parse_git_status_fields(.git_status_fields(repo_root, git_bin))
+}
+
+#' Summarise `git status --porcelain=v2 -z --branch` fields
+#'
+#' Same counts as `.parse_git_status_v2()`; a rename record's second field
+#' (the old path) is skipped rather than read as a record of its own.
+#' @noRd
+.parse_git_status_fields <- function(fields) {
+  # Records keep only their kind and XY columns (all the summary reads), so
+  # a path containing a newline can't split one into two lines.
+  lines <- character()
+  i <- 1L
+  n <- length(fields)
+  while (i <= n) {
+    field <- fields[[i]]
+    if (startsWith(field, "# ")) {
+      lines <- c(lines, gsub("\n", " ", field, fixed = TRUE))
+    } else if (nzchar(field)) {
+      lines <- c(lines, substr(field, 1L, 4L))
+    }
+    i <- i + if (startsWith(field, "2 ")) 2L else 1L
+  }
+  headers <- lines[startsWith(lines, "# ")]
+  status <- .parse_git_status_v2(paste(lines, collapse = "\n"))
+  oid <- sub("^# branch\\.oid ", "", headers[startsWith(headers, "# branch.oid ")])
+  status$oid <- if (length(oid) == 1L && !identical(oid, "(initial)")) oid else ""
+  status
 }
 
 #' @noRd

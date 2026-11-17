@@ -88,6 +88,19 @@ A route of a disabled feature returns `403 FEATURE_DISABLED` and does
 nothing. Without `github`, nothing starts `gh` or calls the GitHub API, so
 the page's regular status checks make no network requests.
 
+### The status poll
+
+While the page is visible it asks for `api/v1/status?include=changes` every
+2 seconds: the status and the changed-file list from one `git status`. What
+changes rarely (Git's availability, the folder check, identity and other
+settings, line counts of files that haven't changed again) is remembered
+for the session and read again when the files behind it change, after a
+minute at most, or after any action gitneighbr takes. A steady poll
+therefore starts one Git process, which matters on Windows, where each one
+costs tens of milliseconds. The poll stops while the page is hidden
+(`visibilitychange`), so a launcher that hides the page in a frame should
+mark it hidden.
+
 ## Git in managed mode
 
 Git runs with:
