@@ -63,9 +63,12 @@
 #'   which have no single well-defined staged/unstaged split).
 #' @noRd
 .git_status_entries <- function(repo_root, git_bin) {
-  raw <- .run_git_raw(git_bin, c("-C", repo_root, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"))
-  fields <- .split_nul(raw)
+  .status_entries_from_fields(.git_status_fields(repo_root, git_bin))
+}
 
+#' Per-file entries from already-read `git status -z` fields
+#' @noRd
+.status_entries_from_fields <- function(fields) {
   entries <- list()
   i <- 1L
   n <- length(fields)
@@ -244,6 +247,44 @@
   list(added = newline_count + as.integer(has_trailing_partial_line), binary = FALSE, large = FALSE)
 }
 
+#' Line counts of untracked files, read again only for files that changed
+#'
+#' Counting an untracked file's lines means opening and reading it, which
+#' on Windows costs about a millisecond per file even before endpoint
+#' scanning; a folder that isn't committed yet can hold hundreds. Each
+#' file's result is kept with its signature (size and time, read for all
+#' files in one call) and reused while that is unchanged.
+#' @return A list of `.untracked_file_stats()` results, named by path.
+#' @noRd
+.cached_untracked_stats <- function(repo_root, entries, max_bytes, session_state) {
+  paths <- unlist(lapply(entries, function(e) if (e$kind == "untracked") e$path), use.names = FALSE)
+  if (length(paths) == 0L) {
+    return(list())
+  }
+  cache <- if (.poll_memo_enabled(session_state)) .poll_cache(session_state)
+  previous <- cache$untracked_stats
+  now <- as.numeric(Sys.time())
+  if (!identical(previous$max_bytes, max_bytes) || is.null(previous$at) ||
+    (now - previous$at) >= getOption("gitneighbr.poll_cache_ttl", 60)) {
+    previous <- NULL
+  }
+  sigs <- .file_sigs(file.path(repo_root, paths))
+  stats <- stats::setNames(vector("list", length(paths)), paths)
+  for (i in seq_along(paths)) {
+    known <- previous$files[[paths[[i]]]]
+    stats[[i]] <- if (!is.null(known) && identical(known$sig, sigs[[i]])) {
+      known$stats
+    } else {
+      .untracked_file_stats(repo_root, paths[[i]], max_bytes)
+    }
+  }
+  if (!is.null(cache)) {
+    files <- stats::setNames(Map(function(sig, st) list(sig = sig, stats = st), sigs, stats), paths)
+    cache$untracked_stats <- list(max_bytes = max_bytes, at = if (is.null(previous)) now else previous$at, files = files)
+  }
+  stats
+}
+
 #' Build the changed-file list backing `GET /api/v1/changes`
 #'
 #' Combines the porcelain v2 status entries (source of truth for which
@@ -257,14 +298,39 @@
 #'   `state` (`"NEW"`, `"CHANGED"`, `"RENAMED"`, `"DELETED"`, or
 #'   `"CONFLICTED"`), `untracked`, `added`, `deleted`, `binary`, `large`.
 #' @noRd
-.git_changes <- function(repo_root, git_bin, max_bytes = getOption("gitneighbr.diff_max_bytes", 200000L)) {
-  status_entries <- .git_status_entries(repo_root, git_bin)
-  staged_map <- .numstat_lookup(.git_numstat(repo_root, git_bin, cached = TRUE))
-  unstaged_map <- .numstat_lookup(.git_numstat(repo_root, git_bin, cached = FALSE))
+.git_changes <- function(repo_root, git_bin, max_bytes = getOption("gitneighbr.diff_max_bytes", 200000L),
+                         fields = NULL, session_state = NULL) {
+  if (is.null(fields)) {
+    fields <- .git_status_fields(repo_root, git_bin)
+  }
+  status_entries <- .status_entries_from_fields(fields)
+  tracked <- Filter(function(e) e$kind %in% c("ordinary", "rename"), status_entries)
+  # Line counts come from two `git diff --numstat` runs. They can only change
+  # when the status itself does (the index object IDs are part of each
+  # record) or when a listed file is edited again, which changes its
+  # signature; otherwise the previous counts are reused.
+  numstat_key <- if (length(tracked) == 0L) {
+    "none"
+  } else {
+    paths <- unlist(lapply(tracked, function(e) c(e$path, e$old_path)), use.names = FALSE)
+    c(fields, .file_sigs(file.path(repo_root, unique(paths))))
+  }
+  maps <- .poll_memo(session_state, "numstat", numstat_key, function() {
+    if (length(tracked) == 0L) {
+      return(list(staged = list(), unstaged = list()))
+    }
+    list(
+      staged = .numstat_lookup(.git_numstat(repo_root, git_bin, cached = TRUE)),
+      unstaged = .numstat_lookup(.git_numstat(repo_root, git_bin, cached = FALSE))
+    )
+  })
+  staged_map <- maps$staged
+  unstaged_map <- maps$unstaged
+  untracked_stats <- .cached_untracked_stats(repo_root, status_entries, max_bytes, session_state)
 
   lapply(status_entries, function(e) {
     if (e$kind == "untracked") {
-      stats <- .untracked_file_stats(repo_root, e$path, max_bytes)
+      stats <- untracked_stats[[e$path]]
       return(list(
         path = e$path, old_path = NULL, state = "NEW", untracked = TRUE,
         added = stats$added, deleted = 0L, binary = stats$binary, large = stats$large

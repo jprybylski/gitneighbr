@@ -47,17 +47,31 @@ NULL
 #' @return A list (`ok`, `remote`, `branch`, `dest`, `url`, `host`) or an
 #'   error list.
 #' @noRd
-.managed_destination <- function(repo_root, git_bin) {
-  status <- .git_status(repo_root, git_bin)
+.managed_destination <- function(repo_root, git_bin, status = NULL, session_state = NULL) {
+  if (is.null(status)) {
+    status <- .git_status(repo_root, git_bin)
+  }
   if (isTRUE(status$detached) || is.null(status$branch)) {
     return(list(ok = FALSE, code = "DETACHED_HEAD", message = "Switch to a branch before sending or getting updates.", recoverable = FALSE))
   }
-  upstream <- .git_upstream_info(repo_root, git_bin, status$branch)
-  remote <- upstream$remote %||% "origin"
+  # The settings read below are reused by the status poll until a config
+  # file changes (`session_state` is only passed from there).
+  settings <- .poll_memo(session_state, "destination", c(status$branch, .config_fingerprint(repo_root, git_bin)), function() {
+    upstream <- .git_upstream_info(repo_root, git_bin, status$branch)
+    remote <- upstream$remote %||% "origin"
+    url_result <- .git_exec(git_bin, c("-C", repo_root, "config", "--get", paste0("remote.", remote, ".url")), error_on_status = FALSE, timeout = 5)
+    push_url <- .git_exec(git_bin, c("-C", repo_root, "config", "--get", paste0("remote.", remote, ".pushurl")), error_on_status = FALSE, timeout = 5)
+    list(
+      upstream = upstream, remote = remote,
+      url_ok = identical(url_result$status, 0L), url = trimws(url_result$stdout),
+      push_ok = identical(push_url$status, 0L), push_url = trimws(push_url$stdout)
+    )
+  })
+  upstream <- settings$upstream
+  remote <- settings$remote
   dest <- upstream$branch %||% status$branch
-  url_result <- .git_exec(git_bin, c("-C", repo_root, "config", "--get", paste0("remote.", remote, ".url")), error_on_status = FALSE, timeout = 5)
-  url <- trimws(url_result$stdout)
-  if (!identical(url_result$status, 0L) || !nzchar(url)) {
+  url <- settings$url
+  if (!settings$url_ok || !nzchar(url)) {
     return(list(ok = FALSE, code = "NO_REMOTE", message = "This project isn't connected to a shared copy yet.", recoverable = TRUE))
   }
   if (!.is_https_url(url)) {
@@ -67,8 +81,7 @@ NULL
       recoverable = FALSE
     ))
   }
-  push_url <- .git_exec(git_bin, c("-C", repo_root, "config", "--get", paste0("remote.", remote, ".pushurl")), error_on_status = FALSE, timeout = 5)
-  if (identical(push_url$status, 0L) && !identical(trimws(push_url$stdout), url)) {
+  if (settings$push_ok && !identical(settings$push_url, url)) {
     return(list(ok = FALSE, code = "REMOTE_PUSHURL", message = "This project sends to a different address than it reads from, which isn't supported here.", recoverable = FALSE))
   }
   list(ok = TRUE, remote = remote, branch = status$branch, dest = dest, url = url, host = .url_host(url))
@@ -473,7 +486,7 @@ NULL
   if (is.null(status) || isTRUE(status$detached)) {
     return(NULL)
   }
-  dest <- .managed_destination(repo_root, git_bin)
+  dest <- .managed_destination(repo_root, git_bin, status = status, session_state = session_state)
   check <- if (isTRUE(dest$ok)) .valid_remote_check(session_state, dest)
   list(
     configured = !identical(dest$code, "NO_REMOTE"),

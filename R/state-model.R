@@ -65,16 +65,23 @@
 #' Is a merge, rebase, cherry-pick, or revert currently in progress?
 #'
 #' Checks for the marker files/directories Git itself leaves behind while
-#' one of these operations is stopped on a conflict, via
-#' `git rev-parse --git-path` so the check works under worktrees and
-#' submodules without hardcoding a `.git/` layout. Purely a filesystem
-#' read - no state-changing Git call is made.
+#' one of these operations is stopped on a conflict, in the per-worktree Git
+#' folder (so the check works under linked worktrees and submodules). Purely
+#' a filesystem read; no Git process starts unless `.git_dirs()` can't read
+#' the layout.
 #'
 #' @return One of `"merge"`, `"rebase"`, `"cherry-pick"`, `"revert"`, or
 #'   `NULL` if none is in progress.
 #' @noRd
 .git_in_progress_operation <- function(repo_root, git_bin) {
+  # The markers live in the per-worktree Git folder, which `.git_dirs()`
+  # finds without starting Git; `--git-path` is the fallback for a layout
+  # it can't read.
+  dirs <- .git_dirs(repo_root)
   git_path <- function(name) {
+    if (!is.null(dirs)) {
+      return(file.path(dirs$git_dir, name))
+    }
     result <- tryCatch(
       .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--git-path", name),
         error_on_status = FALSE, timeout = 5
@@ -172,7 +179,16 @@
 #' @return An integer day count, or `NULL` if it can't be determined
 #'   (e.g. an unborn repository with no commits yet).
 #' @noRd
-.days_since_last_commit <- function(repo_root, git_bin) {
+.days_since_last_commit <- function(repo_root, git_bin, committed_at = .last_commit_time(repo_root, git_bin)) {
+  if (is.null(committed_at)) {
+    return(NULL)
+  }
+  as.integer(floor(as.numeric(Sys.time()) - committed_at) %/% 86400L)
+}
+
+#' When `HEAD` was committed (seconds since the epoch), or `NULL`
+#' @noRd
+.last_commit_time <- function(repo_root, git_bin) {
   result <- tryCatch(
     .git_exec(git_bin, c("-C", repo_root, "log", "-1", "--format=%ct"),
       error_on_status = FALSE, timeout = 5
@@ -186,7 +202,7 @@
   if (is.na(committed_at)) {
     return(NULL)
   }
-  as.integer(floor(as.numeric(Sys.time()) - committed_at) %/% 86400L)
+  committed_at
 }
 
 #' Threshold (in whole days) before changes outside a snapshot are called "stale"
@@ -233,8 +249,13 @@
   add <- function(code, message) {
     notices[[length(notices) + 1L]] <<- list(code = code, message = message)
   }
+  # Settings-derived answers are reused until a config file changes (see
+  # R/poll-cache.R); each lookup below would otherwise start Git.
+  config_key <- .config_fingerprint(repo_root, git_bin)
+  cached <- function(name, compute, key = config_key) .poll_memo(session_state, name, key, compute)
+  oid <- status$oid %||% ""
 
-  if (!isTRUE(.git_identity(repo_root, git_bin)$complete)) {
+  if (!isTRUE(cached("identity", function() .git_identity(repo_root, git_bin))$complete)) {
     add("IDENTITY_INCOMPLETE", "Git needs your name and email before you can save a snapshot.")
   }
 
@@ -242,7 +263,8 @@
     add("UNTRACKED_PRESENT", "There are untracked files in this repository.")
   }
   if (isTRUE(status$has_changes) && !isTRUE(status$unborn)) {
-    days_old <- .days_since_last_commit(repo_root, git_bin)
+    committed_at <- cached("last_commit_time", function() .last_commit_time(repo_root, git_bin), key = oid)
+    days_old <- .days_since_last_commit(repo_root, git_bin, committed_at = committed_at)
     if (!is.null(days_old) && days_old >= .stale_changes_days) {
       add("STALE_CHANGES", "It's been a while since your last saved snapshot.")
     }
@@ -251,27 +273,32 @@
     add("IGNORED_PRESENT", "There are ignored files in this repository.")
   }
 
-  hooks <- .active_hooks(repo_root, git_bin)
+  hooks_dir <- cached("hooks_dir", function() .git_hooks_dir(repo_root, git_bin))
+  hooks <- .active_hooks(repo_root, git_bin, dir = hooks_dir)
   if (any(hooks %in% c("pre-commit", "commit-msg", "post-commit"))) {
     add("COMMIT_HOOK_ACTIVE", "A commit hook will run when you save a snapshot.")
   }
-  if (.commit_signing_enabled(repo_root, git_bin)) {
+  if (cached("signing", function() .commit_signing_enabled(repo_root, git_bin))) {
     add("SIGNING_ENABLED", "Commit signing is enabled for this repository.")
   }
-  if (.git_lfs_active(repo_root, git_bin)) {
+  lfs_key <- c(config_key, .file_sigs(fs::path(repo_root, ".gitattributes")))
+  if (cached("lfs", function() .git_lfs_active(repo_root, git_bin), key = lfs_key)) {
     add("LFS_ACTIVE", "Git LFS is active in this repository.")
   }
   if (fs::file_exists(fs::path(repo_root, ".gitmodules"))) {
     add("SUBMODULE_PRESENT", "This repository contains a submodule.")
   }
 
-  remote_url <- .git_remote_url(repo_root, git_bin)
+  remote_url <- cached("remote_url", function() .git_remote_url(repo_root, git_bin))
   if (!is.null(remote_url) && !.is_github_remote(remote_url)) {
     add("REMOTE_NOT_GITHUB", "The current remote is not hosted on GitHub.")
   }
 
   pushed_tags <- session_state$pushed_tags %||% character()
-  if (length(pushed_tags) > 0L && length(intersect(.git_tags_at_head(repo_root, git_bin), pushed_tags)) > 0L) {
+  tags_at_head <- function() {
+    cached("tags_at_head", function() .git_tags_at_head(repo_root, git_bin), key = c(oid, .tags_fingerprint(repo_root)))
+  }
+  if (length(pushed_tags) > 0L && length(intersect(tags_at_head(), pushed_tags)) > 0L) {
     add("PUSHED_TAG_AT_HEAD", "A pushed tag exists for the current commit.")
   }
   pending_tags <- session_state$pending_tags %||% character()
@@ -308,7 +335,7 @@
 #'   last call).
 #' @noRd
 .status_payload <- function(repo_root, git_bin, session_state, show_ignored = FALSE) {
-  git_ok <- .git_available(git_bin)
+  git_ok <- .cached_git_available(git_bin, session_state)
   # `repo_root` may not be a Git repository yet (onboarding: init/clone
   # haven't run). `.git_status()` uses `error_on_status = TRUE` and would
   # throw for a non-repo path, so repo-ness is checked first; `NULL` here
@@ -317,19 +344,29 @@
   features <- session_state$features %||% .MANAGED_FEATURES
   # A managed session works only on its exact folder and only when the
   # repository's own settings are supported (see `.managed_repo_check()`).
-  check <- if (managed && git_ok) .managed_repo_check(repo_root, git_bin) else NULL
-  is_worktree <- if (managed) identical(check$state, "worktree") else identical(.git_repo_kind(repo_root, git_bin), "worktree")
-  status <- if (git_ok && is_worktree) {
-    .git_status(repo_root, git_bin)
-  } else {
-    NULL
+  check_entry <- if (git_ok) .cached_repo_check(repo_root, git_bin, session_state, managed)
+  check <- if (managed) check_entry$value
+  is_worktree <- identical(check_entry$value$state, "worktree")
+  # One `git status` per poll: the summary, `head` and (for
+  # `?include=changes`) the changed-file list all come from these fields.
+  fields <- if (git_ok && is_worktree) .git_status_fields(repo_root, git_bin)
+  # A reused managed check is only valid while no attributes file changed;
+  # `git status` lists any that did (see `.attributes_fingerprint()`).
+  if (managed && !is.null(fields) && .update_attributes_key(session_state, .attributes_fingerprint(repo_root, fields))) {
+    if (isTRUE(check_entry$fresh)) {
+      # Just computed against these same files: keep it under the new key.
+      .rekey_repo_check(repo_root, session_state, managed)
+    } else {
+      check <- .cached_repo_check(repo_root, git_bin, session_state, managed)$value
+      if (!identical(check$state, "worktree")) {
+        fields <- NULL
+      }
+    }
   }
+  status <- if (!is.null(fields)) .parse_git_status_fields(fields)
   # The commit the user is looking at; a snapshot is only saved on top of
   # this exact commit (see `.git_commit_selected(expected_head =)`).
-  head_sha <- if (git_ok && !is.null(status)) {
-    head <- .git_exec(git_bin, c("-C", repo_root, "rev-parse", "--verify", "-q", "HEAD"), error_on_status = FALSE, timeout = 5)
-    if (identical(head$status, 0L)) trimws(head$stdout) else ""
-  }
+  head_sha <- if (git_ok && !is.null(status)) status$oid
   notices <- if (git_ok && !is.null(status)) {
     .status_notices(repo_root, git_bin, status, session_state, show_ignored = show_ignored)
   } else {
@@ -398,5 +435,58 @@
     session_state$last_snapshot <- data
   }
 
-  list(data = data, version = session_state$version)
+  # `fields` lets `GET api/v1/status?include=changes` build the changed-file
+  # list from this same `git status` run.
+  list(data = data, version = session_state$version, fields = fields)
+}
+
+#' Is Git usable? Remembered for the session once it is
+#' @noRd
+.cached_git_available <- function(git_bin, session_state) {
+  ok <- .poll_memo(session_state, "git_available", as.character(git_bin), function() .git_available(git_bin))
+  if (!isTRUE(ok)) {
+    cache <- .poll_cache(session_state)
+    if (!is.null(cache)) cache$git_available <- NULL
+  }
+  isTRUE(ok)
+}
+
+#' Can this folder be worked on? (`.managed_repo_check()` in a managed
+#' session, `.git_repo_kind()` otherwise), reused while nothing it reads changed
+#' @return A memo entry: `value` is a list with at least `state`
+#'   (`"worktree"` when the folder can be worked on); `fresh` says whether it
+#'   was just computed.
+#' @noRd
+.cached_repo_check <- function(repo_root, git_bin, session_state, managed) {
+  .poll_memo_entry(session_state, "repo_check", .repo_check_key(repo_root, session_state, managed), function() {
+    if (managed) .managed_repo_check(repo_root, git_bin) else list(state = .git_repo_kind(repo_root, git_bin))
+  })
+}
+
+#' @noRd
+.repo_check_key <- function(repo_root, session_state, managed) {
+  list(.repo_fingerprint(repo_root), if (managed) .poll_cache(session_state)$attributes_key)
+}
+
+#' Store the current repository check under the current key
+#' @noRd
+.rekey_repo_check <- function(repo_root, session_state, managed) {
+  cache <- .poll_cache(session_state)
+  if (!is.null(cache) && !is.null(cache$repo_check)) {
+    entry <- cache$repo_check
+    entry$key <- .repo_check_key(repo_root, session_state, managed)
+    cache$repo_check <- entry
+  }
+  invisible(NULL)
+}
+
+#' Record the attributes signature; `TRUE` when it differs from the last one
+#' @noRd
+.update_attributes_key <- function(session_state, key) {
+  cache <- .poll_cache(session_state)
+  if (is.null(cache) || identical(cache$attributes_key, key)) {
+    return(FALSE)
+  }
+  cache$attributes_key <- key
+  TRUE
 }
