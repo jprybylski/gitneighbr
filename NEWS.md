@@ -1,4 +1,4 @@
-# gitneighbr (development version)
+# gitneighbr 0.2.2
 
 * The 2-second status poll is much cheaper, for Windows in particular, where each Git process costs tens of milliseconds (#50). A steady poll now starts one Git process instead of about twenty:
   * the page asks for `api/v1/status?include=changes`, which builds the status and the changed-file list from a single `git status` (`api/v1/changes` still works on its own), and fetches identity only until it has filled the form;
