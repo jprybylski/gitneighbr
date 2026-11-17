@@ -47,11 +47,11 @@ NULL
 #' @return A list with `value` and `fresh` (`TRUE` when `compute()` ran).
 #' @noRd
 .poll_memo_entry <- function(session_state, name, key, compute) {
-  cache <- .poll_cache(session_state)
-  ttl <- getOption("gitneighbr.poll_cache_ttl", 60)
-  if (is.null(cache) || !is.numeric(ttl) || ttl <= 0 || isTRUE(session_state$mutation_lock)) {
+  if (!.poll_memo_enabled(session_state)) {
     return(list(value = compute(), fresh = TRUE))
   }
+  cache <- .poll_cache(session_state)
+  ttl <- getOption("gitneighbr.poll_cache_ttl", 60)
   now <- as.numeric(Sys.time())
   entry <- cache[[name]]
   if (!is.null(entry) && identical(entry$key, key) && (now - entry$at) < ttl) {
@@ -60,6 +60,13 @@ NULL
   value <- compute()
   cache[[name]] <- list(key = key, value = value, at = now)
   list(value = value, fresh = TRUE)
+}
+
+#' May this session reuse remembered answers right now?
+#' @noRd
+.poll_memo_enabled <- function(session_state) {
+  ttl <- getOption("gitneighbr.poll_cache_ttl", 60)
+  is.environment(session_state) && is.numeric(ttl) && length(ttl) == 1L && ttl > 0 && !isTRUE(session_state$mutation_lock)
 }
 
 #' Look up or compute one memo entry, returning only the value

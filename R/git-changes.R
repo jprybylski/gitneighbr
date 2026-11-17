@@ -247,6 +247,44 @@
   list(added = newline_count + as.integer(has_trailing_partial_line), binary = FALSE, large = FALSE)
 }
 
+#' Line counts of untracked files, read again only for files that changed
+#'
+#' Counting an untracked file's lines means opening and reading it, which
+#' on Windows costs about a millisecond per file even before endpoint
+#' scanning; a folder that isn't committed yet can hold hundreds. Each
+#' file's result is kept with its signature (size and time, read for all
+#' files in one call) and reused while that is unchanged.
+#' @return A list of `.untracked_file_stats()` results, named by path.
+#' @noRd
+.cached_untracked_stats <- function(repo_root, entries, max_bytes, session_state) {
+  paths <- unlist(lapply(entries, function(e) if (e$kind == "untracked") e$path), use.names = FALSE)
+  if (length(paths) == 0L) {
+    return(list())
+  }
+  cache <- if (.poll_memo_enabled(session_state)) .poll_cache(session_state)
+  previous <- cache$untracked_stats
+  now <- as.numeric(Sys.time())
+  if (!identical(previous$max_bytes, max_bytes) || is.null(previous$at) ||
+    (now - previous$at) >= getOption("gitneighbr.poll_cache_ttl", 60)) {
+    previous <- NULL
+  }
+  sigs <- .file_sigs(file.path(repo_root, paths))
+  stats <- stats::setNames(vector("list", length(paths)), paths)
+  for (i in seq_along(paths)) {
+    known <- previous$files[[paths[[i]]]]
+    stats[[i]] <- if (!is.null(known) && identical(known$sig, sigs[[i]])) {
+      known$stats
+    } else {
+      .untracked_file_stats(repo_root, paths[[i]], max_bytes)
+    }
+  }
+  if (!is.null(cache)) {
+    files <- stats::setNames(Map(function(sig, st) list(sig = sig, stats = st), sigs, stats), paths)
+    cache$untracked_stats <- list(max_bytes = max_bytes, at = if (is.null(previous)) now else previous$at, files = files)
+  }
+  stats
+}
+
 #' Build the changed-file list backing `GET /api/v1/changes`
 #'
 #' Combines the porcelain v2 status entries (source of truth for which
@@ -288,10 +326,11 @@
   })
   staged_map <- maps$staged
   unstaged_map <- maps$unstaged
+  untracked_stats <- .cached_untracked_stats(repo_root, status_entries, max_bytes, session_state)
 
   lapply(status_entries, function(e) {
     if (e$kind == "untracked") {
-      stats <- .untracked_file_stats(repo_root, e$path, max_bytes)
+      stats <- untracked_stats[[e$path]]
       return(list(
         path = e$path, old_path = NULL, state = "NEW", untracked = TRUE,
         added = stats$added, deleted = 0L, binary = stats$binary, large = stats$large

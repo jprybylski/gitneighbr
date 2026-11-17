@@ -118,9 +118,30 @@
   invisible(TRUE)
 }
 
+#' Regular expressions already built from policy globs
+#'
+#' Every status poll matches each changed file against every policy glob;
+#' building the expression is far slower than using it, so each glob is
+#' converted once per process.
+#' @noRd
+.glob_regex_cache <- new.env(parent = emptyenv())
+
 #' Convert a policy glob to an anchored regular expression
 #' @noRd
 .glob_regex <- function(glob) {
+  if (!nzchar(glob)) {
+    return(.glob_regex_build(glob))
+  }
+  regex <- .glob_regex_cache[[glob]]
+  if (is.null(regex)) {
+    regex <- .glob_regex_build(glob)
+    assign(glob, regex, envir = .glob_regex_cache)
+  }
+  regex
+}
+
+#' @noRd
+.glob_regex_build <- function(glob) {
   dir_prefix <- endsWith(glob, "/")
   if (dir_prefix) glob <- paste0(glob, "**")
   out <- ""

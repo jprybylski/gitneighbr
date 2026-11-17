@@ -179,6 +179,22 @@ test_that("the poll memo notices changes made outside gitneighbr", {
   writeLines(c("one", "two", "three", "four", "five"), file.path(repo$dir, "a.txt"))
   expect_identical(added(), 3L)
 
+  # An untracked file is counted again only when it changes.
+  writeLines(c("u1", "u2"), file.path(repo$dir, "untracked.txt"))
+  expect_identical(sort(added()), c(2L, 3L))
+  read <- 0L
+  real_stats <- .untracked_file_stats
+  testthat::local_mocked_bindings(.untracked_file_stats = function(...) {
+    read <<- read + 1L
+    real_stats(...)
+  })
+  expect_identical(sort(added()), c(2L, 3L))
+  expect_identical(read, 0L)
+  writeLines(c("u1", "u2", "u3", "u4"), file.path(repo$dir, "untracked.txt"))
+  expect_identical(sort(added()), c(3L, 4L))
+  expect_identical(read, 1L)
+  unlink(file.path(repo$dir, "untracked.txt"))
+
   # A commit made elsewhere.
   repo$run("-c", "commit.gpgsign=false", "commit", "-q", "-am", "elsewhere")
   expect_identical(.status_payload(repo$dir, repo$git, session_state)$data$head, trimws(repo$run("rev-parse", "HEAD")$stdout))
@@ -226,4 +242,107 @@ test_that("status?include=changes gives the same list as GET api/v1/changes", {
   separate <- .api_req(api, "/api/v1/changes", headers = .api_auth(api))$json
   expect_identical(combined$changes, separate$data$changes)
   expect_null(.api_req(api, "/api/v1/status", headers = .api_auth(api))$json$changes)
+})
+
+test_that("a linked worktree's Git folders are found without Git, matching --git-path", {
+  repo <- poll_repo("clean")
+  linked <- file.path(withr::local_tempdir(), "linked")
+  repo$run("worktree", "add", "-q", "-b", "side", linked)
+  dirs <- .git_dirs(linked)
+  git_path <- function(name) {
+    out <- trimws(processx::run(repo$git, c("-C", linked, "rev-parse", "--git-path", name))$stdout)
+    normalizePath(if (fs::is_absolute_path(out)) out else file.path(linked, out), mustWork = FALSE)
+  }
+  expect_identical(normalizePath(file.path(dirs$git_dir, "MERGE_HEAD"), mustWork = FALSE), git_path("MERGE_HEAD"))
+  expect_identical(normalizePath(file.path(dirs$common_dir, "config")), git_path("config"))
+
+  # The pointer and the shared config are part of the signatures.
+  expect_true(any(grepl("config|", .repo_fingerprint(linked), fixed = TRUE)))
+  writeLines("x", file.path(linked, "a.txt"))
+  new_state <- function() {
+    s <- .new_session_state()
+    s$features <- setdiff(.STANDALONE_FEATURES, "github")
+    s
+  }
+  session_state <- new_state()
+  .status_payload(linked, repo$git, session_state)
+  cached <- .status_payload(linked, repo$git, session_state)$data
+  uncached <- withr::with_options(list(gitneighbr.poll_cache_ttl = 0), .status_payload(linked, repo$git, new_state()))$data
+  expect_identical(cached, uncached)
+  expect_identical(cached$branch, "side")
+  expect_identical(cached$unstaged_count, 1L)
+})
+
+test_that("an unreadable .git falls back to asking Git", {
+  dir <- withr::local_tempdir()
+  expect_null(.git_dirs(dir))
+  writeLines("not a pointer", file.path(dir, ".git"))
+  expect_null(.git_dirs(dir))
+  writeLines("gitdir: missing", file.path(dir, ".git"))
+  expect_null(.git_dirs(dir))
+  expect_null(.tags_fingerprint(dir))
+
+  # In-progress detection still works through `rev-parse --git-path`.
+  repo <- poll_repo("merge")
+  testthat::local_mocked_bindings(.git_dirs = function(repo_root) NULL)
+  expect_identical(.git_in_progress_operation(repo$dir, repo$git), "merge")
+  expect_null(.git_in_progress_operation(withr::local_tempdir(), repo$git))
+})
+
+test_that("the memo is off without a session environment, with a zero TTL, and under the lock", {
+  calls <- 0L
+  compute <- function() {
+    calls <<- calls + 1L
+    calls
+  }
+  expect_null(.poll_cache(list()))
+  expect_identical(.poll_memo(list(), "x", 1, compute), 1L)
+  expect_null(.poll_cache_clear(list()))
+
+  session_state <- .new_session_state()
+  expect_identical(.poll_memo(session_state, "x", 1, compute), 2L)
+  expect_identical(.poll_memo(session_state, "x", 1, compute), 2L)
+  expect_identical(.poll_memo(session_state, "x", 2, compute), 3L)
+  withr::with_options(list(gitneighbr.poll_cache_ttl = 0), expect_identical(.poll_memo(session_state, "x", 2, compute), 4L))
+  session_state$mutation_lock <- TRUE
+  expect_identical(.poll_memo(session_state, "x", 2, compute), 5L)
+  session_state$mutation_lock <- FALSE
+  expect_identical(.poll_memo(session_state, "x", 2, compute), 3L)
+  .poll_cache_clear(session_state)
+  expect_identical(.poll_memo(session_state, "x", 2, compute), 6L)
+
+  # Git that isn't there is asked again on the next poll, never remembered.
+  expect_false(.cached_git_available(file.path(withr::local_tempdir(), "no-git"), session_state))
+  expect_null(session_state$poll_cache$git_available)
+})
+
+test_that("the config signature follows the files this Git reads", {
+  repo <- poll_repo("clean")
+  global <- withr::local_tempfile(fileext = ".gitconfig")
+  writeLines("", global)
+  withr::local_envvar(GIT_CONFIG_GLOBAL = global, GIT_CONFIG_SYSTEM = "")
+  expect_true(any(startsWith(.config_fingerprint(repo$dir, repo$git), paste0(global, "|"))))
+  withr::local_envvar(GIT_CONFIG_GLOBAL = "", XDG_CONFIG_HOME = "/xdg")
+  expect_true(any(startsWith(.config_fingerprint(repo$dir, repo$git), "/xdg/git/config|")))
+  managed <- .managed_git(repo$git, global)
+  expect_true(any(startsWith(.outside_config_files(managed), normalizePath(global, winslash = "/"))))
+})
+
+test_that("GitHub status from the poll's status names the same branch and remote", {
+  repo <- poll_repo("clean")
+  repo$run("remote", "add", "origin", "https://github.com/example/repo.git")
+  withr::local_envvar(GITHUB_PAT = "", GITHUB_TOKEN = "", GH_TOKEN = "")
+  session_state <- .new_session_state()
+  status <- .git_status(repo$dir, repo$git)
+  from_status <- .github_api_status(repo$dir, repo$git, session_state, gh_bin = "", status = status)
+  direct <- .github_api_status(repo$dir, repo$git, session_state, gh_bin = "")
+  expect_identical(from_status, direct)
+  expect_identical(from_status$repo, "repo")
+
+  repo$run("checkout", "-q", "--detach", "HEAD")
+  detached <- .git_status(repo$dir, repo$git)
+  expect_identical(
+    .github_api_status(repo$dir, repo$git, session_state, gh_bin = "", status = detached),
+    .github_api_status(repo$dir, repo$git, session_state, gh_bin = "")
+  )
 })
